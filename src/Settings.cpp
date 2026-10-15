@@ -46,6 +46,9 @@ void settingsLoad() {
   s.sleepAfterParkedMin = prefs.getUShort("slpAfter", 60);
   s.sleepReportMin = prefs.getUShort("slpRep", 120);
   s.lowBatteryPercent = prefs.getUChar("lowBat", 15);
+  s.displayType = prefs.getUChar("dispType", DISPLAY_SSD1306);
+  s.displayFlip = prefs.getBool("dispFlip", false);
+  s.displayWifi = prefs.getBool("dispWifi", false);
   prefs.end();
 }
 
@@ -75,6 +78,9 @@ void settingsSave() {
   prefs.putUShort("slpAfter", s.sleepAfterParkedMin);
   prefs.putUShort("slpRep", s.sleepReportMin);
   prefs.putUChar("lowBat", s.lowBatteryPercent);
+  prefs.putUChar("dispType", s.displayType);
+  prefs.putBool("dispFlip", s.displayFlip);
+  prefs.putBool("dispWifi", s.displayWifi);
   prefs.end();
 }
 

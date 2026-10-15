@@ -43,6 +43,7 @@ PowerState powerRead(int modemMv) {
   static bool wasOnVbus = false;
   int adcMv = readMv(PIN_BATTERY_ADC, BATTERY_DIVIDER);
   PowerState s;
+  s.adcPinMv = (int)(adcMv / BATTERY_DIVIDER);
 
 #if BATTERY_ADC_ZERO_ON_VBUS
   if (adcMv < BATTERY_ADC_ZERO_MV) {

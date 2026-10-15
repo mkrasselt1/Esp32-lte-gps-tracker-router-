@@ -51,6 +51,31 @@ also nicht im Klartext übers WLAN.
 **Passwort vergessen?** Per USB den seriellen Monitor öffnen (115200 Baud)
 und `factory-reset` eingeben. Danach gelten wieder die Werkseinstellungen.
 
+## Display (optional)
+
+Ein 128×64-OLED mit I²C passt direkt: VCC an 3,3 V, GND, SDA an GPIO21, SCL
+an GPIO22. Die Firmware sucht es beim Start an den Adressen 0x3C und 0x3D.
+
+Solche Displays haben fast immer einen von zwei Controllern: **SSD1306**
+(meist 0,96") oder **SH1106** (meist 1,3"). Welcher es ist, steht selten
+dabei. Voreingestellt ist SSD1306. Ist das Bild um zwei Pixel verschoben oder
+hat einen Streifen Pixelmüll am Rand, unter *Einstellungen → Display* auf
+SH1106 umstellen. Dort lässt es sich auch um 180° drehen.
+
+Angezeigt werden im Wechsel:
+
+- **Übersicht**: Gerätename, Signalbalken, Akku mit Blitz bei Netzstrom,
+  Mobilfunk, GPS (Satelliten und Genauigkeit), Geräte im WLAN, Betriebsstufe.
+- **Position**: Breite, Länge, Höhe, Tempo und Richtung.
+- **WLAN-Zugang** (nur wenn eingeschaltet): QR-Code zum Scannen mit der
+  Handykamera, daneben Name und Passwort. Aus, weil jeder es ablesen kann,
+  der aufs Display schaut. Ist Name plus Passwort länger als etwa 30 Zeichen,
+  wird der QR-Code zu fein und nur der Text erscheint.
+
+Solange das Gerät nicht eingerichtet ist, zeigt das Display WLAN-Name,
+Passwort und die Adresse der Weboberfläche. Im Sparmodus und im Tiefschlaf
+ist es aus.
+
 ## Mobilfunk
 
 - **SIM-PIN**: Die Firmware gibt die PIN genau einmal pro Start ein. Ist sie
@@ -122,8 +147,11 @@ sind in der Weboberfläche einstellbar (0 schaltet eine Regel ab):
      es wach im Sparmodus.
    - **Bewegung**, falls ein Sensor angeschlossen ist (siehe unten).
 
-Netzstrom per ULP gibt es beim T-SIM7600 von Haus aus, bei anderen Boards mit
-dem Spannungsteiler aus „Netzbetrieb erkennen“. Ohne beides wacht der ESP32
+Netzstrom per ULP gibt es beim T-SIM7600 von Haus aus: Mit USB-C oder VBUS
+trennt das Board den Akku-Spannungsteiler ab, GPIO35 liest dann 0 (negativ
+wird es nicht, das kann der ADC gar nicht messen). Den Rohwert zeigt
+`/api/status` als `power.battery_adc_mv`, damit lässt sich das am eigenen
+Board nachprüfen. Andere Boards brauchen den Spannungsteiler aus „Netzbetrieb erkennen“. Ohne beides wacht der ESP32
 alle 10 min kurz auf und sieht nach.
 
 ### Bewegungssensor (optional)

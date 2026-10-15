@@ -45,7 +45,7 @@ String statusJson() {
            "\"gps\":{\"fix\":%s,\"valid\":%s,\"age_s\":%ld,\"latitude\":%.6f,\"longitude\":%.6f,"
            "\"altitude_m\":%.1f,\"accuracy_m\":%.0f,\"speed_kmh\":%.1f,\"course\":%.0f,\"satellites\":%d,"
            "\"hdop\":%.1f,\"utc\":\"%s\"},"
-           "\"power\":{\"external\":%s,\"sensed\":%s,\"battery_mv\":%d,\"battery_percent\":%d,\"charging\":%s},"
+           "\"power\":{\"external\":%s,\"sensed\":%s,\"battery_mv\":%d,\"battery_percent\":%d,\"charging\":%s,\"battery_adc_mv\":%d},"
            "\"mobile\":{\"state\":\"%s\",\"connected\":%s,\"ip\":\"%s\",\"rssi\":%d},"
            "\"hotspot\":{\"active\":%s,\"ssid\":\"%s\",\"clients\":%d},"
            "\"report\":{\"enabled\":%s,\"last_http_code\":%d,\"last_ok_s_ago\":%ld}}",
@@ -53,7 +53,7 @@ String statusJson() {
            status.modeReason, (unsigned long)((millis() - status.modeSince) / 1000), status.hasFix ? "true" : "false",
            f.valid ? "true" : "false", fixAge, f.lat, f.lon, f.altitude, f.accuracyM(), f.speedKmh, f.course,
            f.satellites, f.hdop, f.utc, p.externalPower ? "true" : "false", p.sensed ? "true" : "false", p.batteryMv,
-           p.batteryPercent, p.charging ? "true" : "false", status.modemState, status.online ? "true" : "false",
+           p.batteryPercent, p.charging ? "true" : "false", p.adcPinMv, status.modemState, status.online ? "true" : "false",
            status.online ? PPP.localIP().toString().c_str() : "", status.rssi,
            (WiFi.getMode() & WIFI_AP) ? "true" : "false", jsonEscape(settings.apSsid).c_str(), clientsConnected(),
            settings.reportUrl.isEmpty() ? "false" : "true", status.lastHttpCode, reportAge);

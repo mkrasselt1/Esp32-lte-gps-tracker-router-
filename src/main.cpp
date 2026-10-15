@@ -12,6 +12,7 @@
 #include <esp_sleep.h>
 
 #include "Clients.h"
+#include "Display.h"
 #include "Modem.h"
 #include "Report.h"
 #include "Settings.h"
@@ -136,6 +137,7 @@ static void holdPinsForSleep() {
     rtcFix = {true, status.fix.lat, status.fix.lon, status.fix.altitude, status.fix.hdop, status.fix.satellites};
   }
   sleepScheduleReport();
+  displayOff();
   stopHotspot();
   modemShutdown();
   holdPinsForSleep();
@@ -276,6 +278,7 @@ void setup() {
   }
 
   Serial.println("\nLTE-Router startet");
+  displayStart();
   Network.onEvent(onNetworkEvent);
   startHotspot();
   modemStart();
@@ -311,6 +314,7 @@ void loop() {
   }
 
   webLoop();
+  displayLoop(now);
   updateMode(now);
   handleReports(now);
 
