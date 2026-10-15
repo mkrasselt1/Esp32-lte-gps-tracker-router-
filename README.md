@@ -57,8 +57,13 @@ und `factory-reset` eingeben. Danach gelten wieder die Werkseinstellungen.
   falsch, versucht sie es nicht erneut, damit die SIM nicht gesperrt wird.
   Die Statusseite zeigt dann „SIM-PIN falsch oder fehlt“. Neue PIN eintragen
   und speichern.
-- **APN-Benutzer und -Passwort** werden per PAP übergeben und zusätzlich im
+- **APN-Benutzer und -Passwort** brauchen die meisten Tarife heute nicht.
+  Manche Firmen-, IoT- und ausländische Tarife verlangen sie noch, deshalb
+  sind die Felder da und dürfen leer bleiben. Sie werden per PAP übergeben und zusätzlich im
   Modem hinterlegt (`AT+CGAUTH`), damit es auch bei Netzen mit CHAP klappt.
+
+- **WPS** gibt es nicht. Der ESP32 könnte es zwar, aber Android unterstützt
+  WPS seit Version 9 nicht mehr, iPhones noch nie.
 
 ## Positionsmeldungen
 
@@ -108,15 +113,40 @@ sind in der Weboberfläche einstellbar (0 schaltet eine Regel ab):
    in Fahrt jede Minute.
 3. **Tiefschlaf** nach so langem Stillstand im Sparmodus (Standard 60 min)
    oder sofort, wenn der Akku unter den Mindeststand fällt (Standard 15 %).
-   Modem aus, ESP32 im Tiefschlaf.
-   - Alle 10 min wacht der ESP32 für Sekundenbruchteile auf und prüft, ob
-     wieder Netzstrom da ist. Wenn ja, startet alles normal.
-   - Alle 120 min schaltet er das Modem ein, wartet auf eine Position,
-     meldet und schläft weiter. Bewegt sich das Gerät dabei, bleibt es wach
-     im Sparmodus.
+   Modem aus, ESP32 im Tiefschlaf. Geweckt wird er durch:
+   - **Netzstrom**: Der ULP-Koprozessor, ein Mini-Prozessor im RTC-Teil des
+     ESP32, misst im Schlaf jede Sekunde die Spannung und weckt den ESP32,
+     sobald Strom da ist. Dann startet alles normal, mit Hotspot.
+   - **Meldezeit**: Alle 120 min schaltet er das Modem ein, wartet auf eine
+     Position, meldet und schläft weiter. Bewegt sich das Gerät dabei, bleibt
+     es wach im Sparmodus.
+   - **Bewegung**, falls ein Sensor angeschlossen ist (siehe unten).
 
-Ohne Bewegungssensor merkt das Board im Tiefschlaf erst bei der nächsten
-Meldung, dass es bewegt wurde.
+Netzstrom per ULP gibt es beim T-SIM7600 von Haus aus, bei anderen Boards mit
+dem Spannungsteiler aus „Netzbetrieb erkennen“. Ohne beides wacht der ESP32
+alle 10 min kurz auf und sieht nach.
+
+### Bewegungssensor (optional)
+
+Hängt das Gerät an einer Spannung, die nur mit der Zündung kommt, wacht es
+ohnehin auf, sobald jemand losfährt. Wird es ohne Zündung bewegt
+(abgeschleppt, verladen), merkt es das ohne Sensor erst bei der nächsten
+Meldung.
+
+Abhilfe ist ein Sensor mit Interrupt-Ausgang, der den ESP32 aus dem
+Tiefschlaf weckt:
+
+- **Beschleunigungssensor** wie LIS3DH oder BMA400: braucht im
+  Bewegungserkennungsmodus nur wenige µA. Er muss einmal per I²C (GPIO 21/22)
+  eingestellt werden. Das macht die Firmware noch nicht; sag Bescheid, welchen
+  Chip du nimmst.
+- **Erschütterungsschalter** (SW-420-Modul): ohne Einstellung, aber
+  empfindlicher gegen Fehlalarme und mit rund 1 mA Dauerstrom.
+
+Den Interrupt-Ausgang an GPIO39 anschließen (auf dem T-SIM7600 frei, kann
+den ESP32 wecken) und in `config.h` `PIN_MOTION_WAKE` auf 39 setzen. Nach
+einem Alarm meldet das Gerät die Position und ignoriert weitere Alarme
+30 min lang, damit Wind oder Stöße den Akku nicht leerwecken.
 
 ### Laufzeit auf Akku (geschätzt, nicht gemessen)
 
@@ -128,6 +158,9 @@ Mit einer 18650-Zelle von etwa 3000 mAh, davon rund 2400 mAh nutzbar:
 | Hotspot an, niemand verbunden | ca. 200 mA | ca. 12 h |
 | Sparmodus | ca. 100 mA | ca. 1 Tag |
 | Tiefschlaf, Meldung alle 2 h | ca. 5–10 mA | 1–2 Wochen |
+
+Der ULP-Koprozessor kostet im Schlaf nur einige zehn µA, das fällt neben den
+Meldungen kaum ins Gewicht.
 
 Eine Marken-Zelle mit hoher Strombelastbarkeit verwenden, das Modem zieht
 beim Senden kurz bis zu 2 A. Lithium-Zellen dürfen unter 0 °C nicht geladen
@@ -171,5 +204,6 @@ Am ehesten hakt es bei:
   zuerst die DIP-Schalter prüfen, dann TX/RX in `config.h` tauschen.
 - **CMUX auf dem A7670**: esp-modem unterstützt CMUX für den SIM7600, beim
   A7670 wird derselbe Treiber verwendet.
-- **Tiefschlaf**: Ruhestrom des Boards und sicheres Abschalten des Modems
-  sind ungemessen.
+- **Tiefschlaf**: Ruhestrom des Boards, sicheres Abschalten des Modems und
+  die ULP-Schwelle für Netzstrom sind ungemessen. Wacht das Gerät im Schlaf
+  ständig auf oder gar nicht, `ULP_VBUS_RAW_BELOW` in `config.h` anpassen.

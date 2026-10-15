@@ -34,7 +34,6 @@ struct Settings {
   uint16_t trackerParkedMin;      // Sparmodus: Meldeintervall im Stand
   uint16_t sleepAfterParkedMin;   // Sparmodus -> Tiefschlaf nach so langem Stillstand
   uint16_t sleepReportMin;        // Tiefschlaf: alle so viele Minuten Position melden
-  uint16_t sleepCheckMin;         // Tiefschlaf: so oft auf Netzstrom prüfen
   uint8_t lowBatteryPercent;      // darunter sofort Tiefschlaf
 };
 

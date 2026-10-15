@@ -71,6 +71,26 @@
 #define MODEM_RETRY_S         30    // nach Fehler beim Modemstart
 // Ohne Mobilfunk so lange warten, dann neu starten.
 #define PPP_RESTART_AFTER_S   300
+// ---------------------------------------------------------------------------
+// Tiefschlaf
+// ---------------------------------------------------------------------------
+// Netzstrom erkennt im Tiefschlaf der ULP-Koprozessor: Er misst jede Sekunde
+// den ADC (GPIO35 bzw. PIN_POWER_SENSE) und weckt den ESP32, sobald Strom da
+// ist. Rohwerte des 12-Bit-ADC bei 12 dB Dämpfung, grob 4095 = 3,1 V.
+#define ULP_CHECK_INTERVAL_MS   1000
+#define ULP_VBUS_RAW_BELOW      600   // T-SIM7600: GPIO35 unter ~0,45 V = Netz
+// Boards ohne beides: so oft per Timer aufwachen und nachsehen.
+#define SLEEP_FALLBACK_CHECK_MIN 10
+
+// Optionaler Bewegungs-/Erschütterungssensor, dessen Interrupt den ESP32
+// weckt (z. B. LIS3DH INT1, SW-420-Modul). Muss ein RTC-GPIO sein; auf dem
+// T-SIM7600 ist GPIO39 frei. -1 = keiner.
+#define PIN_MOTION_WAKE   -1
+#define MOTION_WAKE_LEVEL HIGH
+// Nach einem Bewegungsalarm so lange nicht erneut darauf reagieren, damit
+// Wind oder Stöße den Akku nicht leerwecken.
+#define MOTION_COOLDOWN_MIN 30
+
 // Aus dem Tiefschlaf geweckt: so lange auf einen GPS-Fix warten.
 #define WAKE_FIX_TIMEOUT_S    150
 // ... und insgesamt höchstens so lange wach bleiben.

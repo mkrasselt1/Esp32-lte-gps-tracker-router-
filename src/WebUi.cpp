@@ -93,7 +93,6 @@ static const char SETTINGS_HTML[] PROGMEM = PAGE_HEAD("Einstellungen") R"HTML(
 <label>Sparmodus: Meldung im Stand alle (Minuten)</label><input name=trackerParkedMin type=number min=1 max=1440>
 <label>Tiefschlaf nach Stillstand von</label><input name=sleepAfterParkedMin type=number min=0 max=10080>
 <label>Tiefschlaf: Position melden alle</label><input name=sleepReportMin type=number min=10 max=10080>
-<label>Tiefschlaf: auf Netzstrom prüfen alle</label><input name=sleepCheckMin type=number min=1 max=120>
 <label>Sofort Tiefschlaf unter Akkustand (%)</label><input name=lowBatteryPercent type=number min=0 max=90>
 </section>
 <section><h2>Zugang</h2>
@@ -216,12 +215,12 @@ static void handleSettingsGet() {
            "\"simPinSet\":%s,\"reportUrl\":\"%s\",\"deviceName\":\"%s\",\"reportFormat\":%u,\"reportMovingS\":%u,"
            "\"reportParkedS\":%u,\"hotspotMaxBatteryMin\":%u,\"hotspotIdleMin\":%u,\"triggerMac\":\"%s\","
            "\"triggerGraceMin\":%u,\"trackerMovingS\":%u,\"trackerParkedMin\":%u,\"sleepAfterParkedMin\":%u,"
-           "\"sleepReportMin\":%u,\"sleepCheckMin\":%u,\"lowBatteryPercent\":%u}",
+           "\"sleepReportMin\":%u,\"lowBatteryPercent\":%u}",
            e(s.apSsid).c_str(), s.apMaxClients, s.apChannel, e(s.apn).c_str(), e(s.apnUser).c_str(),
            s.simPin.isEmpty() ? "false" : "true", e(s.reportUrl).c_str(), e(s.deviceName).c_str(), s.reportFormat,
            s.reportMovingS, s.reportParkedS, s.hotspotMaxBatteryMin, s.hotspotIdleMin, s.triggerMac.c_str(),
            s.triggerGraceMin, s.trackerMovingS, s.trackerParkedMin, s.sleepAfterParkedMin, s.sleepReportMin,
-           s.sleepCheckMin, s.lowBatteryPercent);
+           s.lowBatteryPercent);
   sendJson(buf);
 }
 
@@ -260,7 +259,6 @@ static void handleSettingsPost() {
   NUM(trackerParkedMin, 1, 1440);
   NUM(sleepAfterParkedMin, 0, 10080);
   NUM(sleepReportMin, 10, 10080);
-  NUM(sleepCheckMin, 1, 120);
   NUM(lowBatteryPercent, 0, 90);
   if (!adminPass.isEmpty()) settings.adminPass = adminPass;
 

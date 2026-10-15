@@ -15,6 +15,7 @@
 #include "Modem.h"
 #include "Report.h"
 #include "Settings.h"
+#include "Sleep.h"
 #include "Status.h"
 #include "WebUi.h"
 #include "config.h"
@@ -38,8 +39,6 @@ struct RtcFix {
   float altitude, hdop;
   int satellites;
 };
-RTC_DATA_ATTR static bool rtcSleeping;
-RTC_DATA_ATTR static uint16_t rtcMinutesSinceReport;
 RTC_DATA_ATTR static RtcFix rtcFix;
 
 static bool apActive = false;
@@ -128,14 +127,6 @@ static void holdPinsForSleep() {
   gpio_deep_sleep_hold_en();
 }
 
-[[noreturn]] static void sleepNow() {
-  rtcSleeping = true;
-  Serial.printf("Tiefschlaf für %u min\n", settings.sleepCheckMin);
-  Serial.flush();
-  esp_sleep_enable_timer_wakeup((uint64_t)settings.sleepCheckMin * 60ULL * 1000000ULL);
-  esp_deep_sleep_start();
-}
-
 // Meldet ein letztes Mal, schaltet alles ab und schläft.
 [[noreturn]] static void enterDeepSleep(const char *reason) {
   Serial.printf("Tiefschlaf: %s\n", reason);
@@ -144,11 +135,11 @@ static void holdPinsForSleep() {
   if (status.fix.valid) {
     rtcFix = {true, status.fix.lat, status.fix.lon, status.fix.altitude, status.fix.hdop, status.fix.satellites};
   }
-  rtcMinutesSinceReport = 0;
+  sleepScheduleReport();
   stopHotspot();
   modemShutdown();
   holdPinsForSleep();
-  sleepNow();
+  sleepStart();
 }
 
 static void updateMode(uint32_t now) {
@@ -217,16 +208,12 @@ static void handleReports(uint32_t now) {
 // Bewegt sich das Gerät, bleibt es wach im Sparmodus.
 static void handleWake(uint32_t now) {
   static int attempts = 0;
-  if (status.power.externalPower) {
-    rtcSleeping = false;
-    ESP.restart();
-  }
+  if (status.power.externalPower) ESP.restart();
   bool fixTimeout = now - wakeStartedAt >= WAKE_FIX_TIMEOUT_S * 1000UL;
   if (status.online && (status.hasFix || fixTimeout) && attempts < 3) {
     attempts++;
     if (reportSend() || attempts == 3) {
       if (moving()) {
-        rtcSleeping = false;
         trackerSince = now;
         lastMovedAt = now;
         setMode(Mode::Tracker, "Bewegung erkannt");
@@ -275,24 +262,18 @@ void setup() {
     status.fix.satellites = rtcFix.satellites;
   }
 
-  if (rtcSleeping && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
-    status.power = powerRead(0);
-    if (!status.power.externalPower) {
-      // Kurz wach: nur prüfen, ob es Zeit für eine Meldung ist.
-      rtcMinutesSinceReport += settings.sleepCheckMin;
-      if (rtcMinutesSinceReport < settings.sleepReportMin) sleepNow();
-      rtcMinutesSinceReport = 0;
-      Serial.println("Aus dem Tiefschlaf: Position melden");
-      status.mode = Mode::WakeReport;
-      status.modeReason = "Meldung aus dem Tiefschlaf";
-      wakeStartedAt = now;
-      WiFi.mode(WIFI_OFF);
-      Network.onEvent(onNetworkEvent);
-      modemStart();
-      return;
-    }
+  Wake wake = sleepWakeReason();
+  if (wake == Wake::SleepAgain) sleepStart();
+  if (wake == Wake::Report || wake == Wake::Motion) {
+    Serial.println(wake == Wake::Motion ? "Bewegung: Position melden" : "Aus dem Tiefschlaf: Position melden");
+    status.mode = Mode::WakeReport;
+    status.modeReason = wake == Wake::Motion ? "Bewegung erkannt" : "Meldung aus dem Tiefschlaf";
+    wakeStartedAt = now;
+    WiFi.mode(WIFI_OFF);
+    Network.onEvent(onNetworkEvent);
+    modemStart();
+    return;
   }
-  rtcSleeping = false;
 
   Serial.println("\nLTE-Router startet");
   Network.onEvent(onNetworkEvent);

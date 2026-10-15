@@ -45,7 +45,6 @@ void settingsLoad() {
   s.trackerParkedMin = prefs.getUShort("trkPark", 15);
   s.sleepAfterParkedMin = prefs.getUShort("slpAfter", 60);
   s.sleepReportMin = prefs.getUShort("slpRep", 120);
-  s.sleepCheckMin = prefs.getUShort("slpChk", 10);
   s.lowBatteryPercent = prefs.getUChar("lowBat", 15);
   prefs.end();
 }
@@ -75,7 +74,6 @@ void settingsSave() {
   prefs.putUShort("trkPark", s.trackerParkedMin);
   prefs.putUShort("slpAfter", s.sleepAfterParkedMin);
   prefs.putUShort("slpRep", s.sleepReportMin);
-  prefs.putUShort("slpChk", s.sleepCheckMin);
   prefs.putUChar("lowBat", s.lowBatteryPercent);
   prefs.end();
 }
