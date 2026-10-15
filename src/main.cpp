@@ -1,182 +1,80 @@
-// Traktor-Tracker für LilyGO T-A7670 / T-SIM7600:
-//  - Mobilfunk per PPP, als WLAN-Hotspot mit NAT an ein, zwei Geräte weitergegeben
-//  - GNSS des Modems, Position an Home Assistant (GPSLogger-Webhook)
-//  - Netz-/Akkubetrieb und Akkustand, ebenfalls an Home Assistant
-//  - lokale Statusseite im Hotspot: http://192.168.4.1/ und /status (JSON)
+// LTE-Router mit GPS-Tracker für LilyGO T-SIM7600 / T-A7670:
+//  - Mobilfunk per PPP, als WLAN-Hotspot mit NAT weitergegeben
+//  - Position aus dem GNSS des Modems an eine URL (Home Assistant GPSLogger
+//    oder JSON), dazu Netz-/Akkubetrieb und Akkustand
+//  - Weboberfläche mit Login für alle Einstellungen
+//  - Energiesparen auf Akku in Stufen bis zum Tiefschlaf, siehe README
 
 #include <Arduino.h>
-#include <HTTPClient.h>
-#include <NetworkClientSecure.h>
 #include <PPP.h>
-#include <WebServer.h>
 #include <WiFi.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
 
+#include "Clients.h"
+#include "Modem.h"
+#include "Report.h"
+#include "Settings.h"
+#include "Status.h"
+#include "WebUi.h"
 #include "config.h"
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
-#warning "include/secrets.h fehlt, es gelten die Platzhalter aus secrets.example.h"
-#include "secrets.example.h"
-#endif
 
-#include "Gnss.h"
-#include "Power.h"
+Status status;
 
-static WebServer server(80);
+const char *modeName(Mode m) {
+  switch (m) {
+    case Mode::Normal: return "Netzbetrieb";
+    case Mode::Battery: return "Akkubetrieb";
+    case Mode::Tracker: return "Sparmodus";
+    case Mode::WakeReport: return "aus Tiefschlaf geweckt";
+  }
+  return "";
+}
 
-static GnssFix lastFix;            // letzte gültige Position
-static bool gnssHasFix = false;    // aktuelle Abfrage hat eine Position
-static PowerState power;
-static bool lastSeenExternalPower = false;
+// Überlebt den Tiefschlaf.
+struct RtcFix {
+  bool valid;
+  double lat, lon;
+  float altitude, hdop;
+  int satellites;
+};
+RTC_DATA_ATTR static bool rtcSleeping;
+RTC_DATA_ATTR static uint16_t rtcMinutesSinceReport;
+RTC_DATA_ATTR static RtcFix rtcFix;
 
-static int pppRssi = 99;          // 99 = unbekannt (AT+CSQ)
-static uint32_t lastGnssPoll = 0;
+static bool apActive = false;
 static uint32_t nextReportAt = 0;
-static uint32_t pppLostSince = 0;  // 0 = verbunden
-static int lastHttpCode = 0;
-static uint32_t lastReportOkAt = 0;
+static uint32_t pppLostSince = 0;   // 0 = verbunden oder nie verbunden gewesen
+static uint32_t batterySince = 0;
+static uint32_t lastClientAt = 0;   // zuletzt ein Gerät im Hotspot
+static uint32_t lastMovedAt = 0;
+static uint32_t trackerSince = 0;
+static uint32_t wakeStartedAt = 0;
 
-// ---------------------------------------------------------------------------
-// Modem einschalten
-// ---------------------------------------------------------------------------
-
-// Wartet auf "OK" auf ein "AT". Läuft über Serial1, bevor PPP den UART übernimmt.
-static bool modemResponds(uint32_t timeoutMs) {
-  uint32_t start = millis();
-  while (millis() - start < timeoutMs) {
-    while (Serial1.available()) Serial1.read();
-    Serial1.print("AT\r\n");
-    uint32_t t = millis();
-    String resp;
-    while (millis() - t < 500) {
-      while (Serial1.available()) resp += (char)Serial1.read();
-      if (resp.indexOf("OK") >= 0) return true;
-      delay(10);
-    }
-  }
-  return false;
-}
-
-static String modemCmdRaw(const char *cmd, uint32_t timeoutMs) {
-  while (Serial1.available()) Serial1.read();
-  Serial1.print(cmd);
-  Serial1.print("\r\n");
-  String resp;
-  uint32_t t = millis();
-  while (millis() - t < timeoutMs) {
-    while (Serial1.available()) resp += (char)Serial1.read();
-    if (resp.indexOf("OK") >= 0 || resp.indexOf("ERROR") >= 0) break;
-    delay(10);
-  }
-  resp.trim();
-  return resp;
-}
-
-static void pulsePwrKey(uint32_t ms) {
-  digitalWrite(PIN_MODEM_PWRKEY, LOW);
-  delay(100);
-  digitalWrite(PIN_MODEM_PWRKEY, HIGH);
-  delay(ms);
-  digitalWrite(PIN_MODEM_PWRKEY, LOW);
-}
-
-static bool modemStatusOn() {
-#if PIN_MODEM_STATUS >= 0
-  return digitalRead(PIN_MODEM_STATUS) == HIGH;
-#else
-  return false;
-#endif
-}
-
-// Bringt das Modem in einen Zustand, in dem es auf AT antwortet. Nach einem
-// Neustart des ESP32 läuft es womöglich noch im PPP-/CMUX-Modus und versteht
-// kein AT mehr — dann zurücksetzen bzw. aus- und wieder einschalten.
-static bool modemPowerOn() {
-  pinMode(PIN_BOARD_POWERON, OUTPUT);
-  digitalWrite(PIN_BOARD_POWERON, HIGH);
-  pinMode(PIN_MODEM_DTR, OUTPUT);
-  digitalWrite(PIN_MODEM_DTR, LOW);  // LOW = nicht schlafen
-#if PIN_MODEM_FLIGHT >= 0
-  pinMode(PIN_MODEM_FLIGHT, OUTPUT);
-  digitalWrite(PIN_MODEM_FLIGHT, HIGH);  // Funk an
-#endif
-#if PIN_MODEM_STATUS >= 0
-  pinMode(PIN_MODEM_STATUS, INPUT);
-#endif
-  pinMode(PIN_MODEM_PWRKEY, OUTPUT);
-  digitalWrite(PIN_MODEM_PWRKEY, LOW);
-#if PIN_MODEM_RESET >= 0
-  pinMode(PIN_MODEM_RESET, OUTPUT);
-  digitalWrite(PIN_MODEM_RESET, !MODEM_RESET_LEVEL);
-#endif
-
-  Serial1.begin(MODEM_BAUD, SERIAL_8N1, PIN_MODEM_RX, PIN_MODEM_TX);
-
-  if (modemResponds(2000)) {
-    Serial.println("Modem läuft bereits");
-    return true;
-  }
-
-#if PIN_MODEM_RESET >= 0
-  Serial.println("Modem zurücksetzen");
-  digitalWrite(PIN_MODEM_RESET, MODEM_RESET_LEVEL);
-  delay(2600);
-  digitalWrite(PIN_MODEM_RESET, !MODEM_RESET_LEVEL);
-#else
-  if (modemStatusOn()) {
-    Serial.println("Modem an, aber stumm: ausschalten");
-    pulsePwrKey(MODEM_POWEROFF_PULSE_MS);
-    for (int i = 0; i < 150 && modemStatusOn(); i++) delay(100);
-    delay(1000);
-  }
-#endif
-
-  Serial.println("Modem einschalten");
-  pulsePwrKey(MODEM_PWRKEY_PULSE_MS);
-  if (modemResponds(30000)) return true;
-
-  // Ohne Statuspin wissen wir nicht, ob es vorher an war und der Puls es
-  // eben ausgeschaltet hat.
-  Serial.println("Keine Antwort, zweiter Einschaltversuch");
-  pulsePwrKey(MODEM_PWRKEY_PULSE_MS);
-  return modemResponds(30000);
-}
-
-static void gnssEnable() {
-#if defined(BOARD_T_SIM7600)
-  // Die GNSS-Antenne hängt an AUXVDD des Modems, die muss erst an.
-  modemCmdRaw("AT+CVAUXV=2800", 2000);
-  modemCmdRaw("AT+CVAUXS=1", 2000);
-  Serial.printf("GNSS an: %s\n", modemCmdRaw("AT+CGPS=1", 5000).c_str());
-#else
-  Serial.printf("GNSS an: %s\n", modemCmdRaw("AT+CGNSSPWR=1", 5000).c_str());
-#endif
-}
+static bool moving() { return status.hasFix && status.fix.speedKmh >= MOVING_SPEED_KMH; }
 
 // ---------------------------------------------------------------------------
 // Netzwerk
 // ---------------------------------------------------------------------------
 
 static void onNetworkEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  clientsOnEvent(event, info);
   switch (event) {
     case ARDUINO_EVENT_PPP_GOT_IP:
       Serial.print("Mobilfunk verbunden: ");
       Serial.println(PPP.localIP());
       PPP.setDefault();
-      WiFi.AP.enableNAPT(true);
+      status.online = true;
+      if (apActive) WiFi.AP.enableNAPT(true);
       pppLostSince = 0;
       break;
     case ARDUINO_EVENT_PPP_LOST_IP:
     case ARDUINO_EVENT_PPP_DISCONNECTED:
+      if (!status.online) break;
       Serial.println("Mobilfunk getrennt");
-      WiFi.AP.enableNAPT(false);
-      if (pppLostSince == 0) pppLostSince = millis() | 1;
-      break;
-    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-      Serial.println("Hotspot: Gerät verbunden");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-      Serial.println("Hotspot: Gerät getrennt");
+      status.online = false;
+      if (apActive) WiFi.AP.enableNAPT(false);
+      pppLostSince = millis() | 1;
       break;
     default:
       break;
@@ -185,233 +83,260 @@ static void onNetworkEvent(arduino_event_id_t event, arduino_event_info_t info) 
 
 static void startHotspot() {
   WiFi.AP.begin();
-  WiFi.AP.config(IPAddress(AP_IP), IPAddress(AP_IP), IPAddress(255, 255, 255, 0), IPAddress(AP_DHCP_START),
-                 IPAddress(AP_DNS));
-  WiFi.AP.create(SECRET_AP_SSID, SECRET_AP_PASS, AP_CHANNEL, 0, AP_MAX_CLIENTS);
+  WiFi.AP.config(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0),
+                 IPAddress(192, 168, 4, 2), IPAddress(1, 1, 1, 1));
+  WiFi.AP.create(settings.apSsid.c_str(), settings.apPass.c_str(), settings.apChannel, 0, settings.apMaxClients);
   WiFi.setSleep(false);
-  if (!WiFi.AP.waitStatusBits(ESP_NETIF_STARTED_BIT, 2000)) Serial.println("Hotspot startet nicht");
-  else Serial.printf("Hotspot \"%s\" auf %s\n", SECRET_AP_SSID, WiFi.AP.localIP().toString().c_str());
+  apActive = true;
+  webStart();
+  if (status.online) WiFi.AP.enableNAPT(true);
+  lastClientAt = millis();
+  Serial.printf("Hotspot \"%s\" an\n", settings.apSsid.c_str());
 }
 
-static void startMobile() {
-  // Serial1 freigeben, PPP öffnet den UART selbst.
-  Serial1.end();
-  PPP.setApn(SECRET_APN);
-  PPP.setPin(SECRET_SIM_PIN);
-  PPP.setPins(PIN_MODEM_TX, PIN_MODEM_RX);
-  if (!PPP.begin(PPP_MODEM_SIM7600, 1, MODEM_BAUD)) {
-    Serial.println("PPP.begin fehlgeschlagen, Neustart");
-    delay(1000);
-    ESP.restart();
-  }
-  Serial.printf("Modem %s, IMEI %s\n", PPP.moduleName().c_str(), PPP.IMEI().c_str());
-
-  Serial.print("Warte auf Netz");
-  uint32_t start = millis();
-  while (!PPP.attached() && millis() - start < 120000) {
-    Serial.print(".");
-    delay(1000);
-  }
-  Serial.println();
-  if (!PPP.attached()) {
-    Serial.println("Kein Netz, Neustart");
-    ESP.restart();
-  }
-  Serial.printf("Netz: %s, RSSI %d\n", PPP.operatorName().c_str(), PPP.RSSI());
-
-  // CMUX: Daten und AT-Befehle gleichzeitig — nötig, um GNSS abzufragen,
-  // während der Hotspot online ist.
-  pppLostSince = millis() | 1;
-  if (!PPP.mode(ESP_MODEM_MODE_CMUX)) {
-    Serial.println("CMUX nicht möglich, Neustart");
-    ESP.restart();
-  }
-}
-
-// SIM7600: "+CBC: 4.123V", andere: "+CBC: 0,85,4123" (mV). 0 = unbekannt.
-static int modemSupplyMv() {
-  String r = PPP.cmd("AT+CBC", 2000);
-  int colon = r.indexOf(':');
-  if (colon < 0) return 0;
-  String v = r.substring(colon + 1);
-  int nl = v.indexOf('\n');
-  if (nl >= 0) v = v.substring(0, nl);
-  v.trim();
-  if (v.indexOf('V') >= 0) return (int)(v.toFloat() * 1000);
-  int comma = v.lastIndexOf(',');
-  return comma >= 0 ? v.substring(comma + 1).toInt() : 0;
+static void stopHotspot() {
+  if (!apActive) return;
+  WiFi.AP.enableNAPT(false);
+  WiFi.AP.end();
+  WiFi.mode(WIFI_OFF);
+  apActive = false;
+  Serial.println("Hotspot aus");
 }
 
 // ---------------------------------------------------------------------------
-// Home Assistant
+// Betriebsstufen
 // ---------------------------------------------------------------------------
 
-static String urlEncode(const char *s) {
-  String out;
-  for (; *s; s++) {
-    char c = *s;
-    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') out += c;
-    else {
-      char buf[4];
-      snprintf(buf, sizeof(buf), "%%%02X", (unsigned char)c);
-      out += buf;
+static void setMode(Mode m, const char *reason) {
+  if (status.mode == m) return;
+  Serial.printf("Betrieb: %s (%s)\n", modeName(m), reason);
+  status.mode = m;
+  status.modeReason = reason;
+  status.modeSince = millis();
+  nextReportAt = millis();  // Wechsel sofort melden
+}
+
+static void holdPinsForSleep() {
+  digitalWrite(PIN_MODEM_PWRKEY, LOW);
+  gpio_hold_en((gpio_num_t)PIN_MODEM_PWRKEY);
+  digitalWrite(PIN_BOARD_POWERON, LOW);
+  gpio_hold_en((gpio_num_t)PIN_BOARD_POWERON);
+#if PIN_MODEM_RESET >= 0
+  digitalWrite(PIN_MODEM_RESET, !MODEM_RESET_LEVEL);
+  gpio_hold_en((gpio_num_t)PIN_MODEM_RESET);
+#endif
+  gpio_deep_sleep_hold_en();
+}
+
+[[noreturn]] static void sleepNow() {
+  rtcSleeping = true;
+  Serial.printf("Tiefschlaf für %u min\n", settings.sleepCheckMin);
+  Serial.flush();
+  esp_sleep_enable_timer_wakeup((uint64_t)settings.sleepCheckMin * 60ULL * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+// Meldet ein letztes Mal, schaltet alles ab und schläft.
+[[noreturn]] static void enterDeepSleep(const char *reason) {
+  Serial.printf("Tiefschlaf: %s\n", reason);
+  status.modeReason = reason;
+  reportSend();
+  if (status.fix.valid) {
+    rtcFix = {true, status.fix.lat, status.fix.lon, status.fix.altitude, status.fix.hdop, status.fix.satellites};
+  }
+  rtcMinutesSinceReport = 0;
+  stopHotspot();
+  modemShutdown();
+  holdPinsForSleep();
+  sleepNow();
+}
+
+static void updateMode(uint32_t now) {
+  if (status.power.externalPower) {
+    if (status.mode != Mode::Normal) {
+      if (!apActive) startHotspot();
+      setMode(Mode::Normal, "am Netz");
+    }
+    return;
+  }
+
+  if (status.mode == Mode::Normal) {
+    batterySince = now;
+    lastClientAt = now;
+    setMode(Mode::Battery, "Netzstrom weg");
+  }
+
+  if (settings.lowBatteryPercent && status.power.batteryMv > 0 &&
+      status.power.batteryPercent <= settings.lowBatteryPercent) {
+    enterDeepSleep("Akku fast leer");
+  }
+
+  if (status.mode == Mode::Battery) {
+    if (clientsConnected() > 0) lastClientAt = now;
+    const char *why = nullptr;
+    uint32_t gone = 0;
+    if (settings.hotspotMaxBatteryMin && now - batterySince >= settings.hotspotMaxBatteryMin * 60000UL) {
+      why = "Hotspot-Zeit auf Akku abgelaufen";
+    } else if (settings.hotspotIdleMin && now - lastClientAt >= settings.hotspotIdleMin * 60000UL) {
+      why = "kein Gerät mehr im WLAN";
+    } else if (!settings.triggerMac.isEmpty() && !clientIsConnected(settings.triggerMac, &gone) && gone &&
+               now - gone >= settings.triggerGraceMin * 60000UL) {
+      why = "Auslöser-Gerät getrennt";
+    }
+    if (why) {
+      stopHotspot();
+      trackerSince = now;
+      setMode(Mode::Tracker, why);
     }
   }
-  return out;
+
+  if (status.mode == Mode::Tracker && settings.sleepAfterParkedMin) {
+    uint32_t still = now - max(lastMovedAt, trackerSince);
+    if (still >= settings.sleepAfterParkedMin * 60000UL) enterDeepSleep("Stillstand");
+  }
 }
 
-// GPSLogger nimmt nur bekannte Felder an (latitude, longitude, device,
-// accuracy, battery, speed, direction, altitude, provider, activity) und
-// verwirft den Rest. Netz-/Akkubetrieb steckt deshalb in "activity".
-static bool reportToHomeAssistant() {
-  if (!lastFix.valid) {
-    Serial.println("Noch keine Position, nichts gemeldet");
-    return false;
+static uint32_t reportInterval() {
+  if (status.mode == Mode::Tracker) {
+    return moving() ? settings.trackerMovingS * 1000UL : settings.trackerParkedMin * 60000UL;
   }
-  if (!PPP.connected()) return false;
+  return (moving() ? settings.reportMovingS : settings.reportParkedS) * 1000UL;
+}
 
-  char body[400];
-  snprintf(body, sizeof(body),
-           "device=%s&latitude=%.6f&longitude=%.6f&accuracy=%.0f&altitude=%.1f&speed=%.2f"
-           "&direction=%.0f&battery=%d&provider=%s&activity=%s",
-           urlEncode(SECRET_DEVICE_NAME).c_str(), lastFix.lat, lastFix.lon, lastFix.accuracyM(), lastFix.altitude,
-           lastFix.speedKmh / 3.6f, lastFix.course, power.batteryPercent, gnssHasFix ? "gps" : "letzte_position",
-           power.externalPower ? "netzbetrieb" : "akkubetrieb");
-
-  NetworkClientSecure tls;
-  NetworkClient plain;
-  bool https = strncmp(SECRET_WEBHOOK_URL, "https", 5) == 0;
-  // Ohne hinterlegtes Zertifikat: verschlüsselt, aber der Server wird nicht
-  // geprüft. Wer das will, setzt hier tls.setCACert(...).
-  if (https) tls.setInsecure();
-
-  HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(https ? (NetworkClient &)tls : plain, SECRET_WEBHOOK_URL)) {
-    Serial.println("Webhook-URL ungültig");
-    return false;
+static void handleReports(uint32_t now) {
+  uint32_t interval = reportInterval();
+  // Losfahren: nicht das lange Stand-Intervall abwarten.
+  if ((int32_t)(nextReportAt - now) > (int32_t)interval) nextReportAt = now + interval;
+  if ((int32_t)(now - nextReportAt) >= 0) {
+    // Fehlgeschlagen oder noch offline: in 30 s nochmal.
+    nextReportAt = now + (reportSend() ? interval : 30000UL);
   }
-  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  lastHttpCode = http.POST((uint8_t *)body, strlen(body));
-  http.end();
+}
 
-  Serial.printf("Home Assistant: HTTP %d\n", lastHttpCode);
-  if (lastHttpCode >= 200 && lastHttpCode < 300) {
-    lastReportOkAt = millis();
-    return true;
+// Aus dem Tiefschlaf zum Melden geweckt: Fix abwarten, melden, weiterschlafen.
+// Bewegt sich das Gerät, bleibt es wach im Sparmodus.
+static void handleWake(uint32_t now) {
+  static int attempts = 0;
+  if (status.power.externalPower) {
+    rtcSleeping = false;
+    ESP.restart();
   }
-  return false;
+  bool fixTimeout = now - wakeStartedAt >= WAKE_FIX_TIMEOUT_S * 1000UL;
+  if (status.online && (status.hasFix || fixTimeout) && attempts < 3) {
+    attempts++;
+    if (reportSend() || attempts == 3) {
+      if (moving()) {
+        rtcSleeping = false;
+        trackerSince = now;
+        lastMovedAt = now;
+        setMode(Mode::Tracker, "Bewegung erkannt");
+        return;
+      }
+      enterDeepSleep("Meldung erledigt");
+    }
+    delay(5000);
+  }
+  if (now - wakeStartedAt >= WAKE_MAX_AWAKE_S * 1000UL) enterDeepSleep("Wachzeit abgelaufen");
 }
 
 // ---------------------------------------------------------------------------
-// Lokale Statusseite
+// Werkseinstellungen per USB: "factory-reset" im seriellen Monitor. Ein
+// Taster an GPIO0 wäre bequemer, aber die Auto-Reset-Schaltung des USB-Chips
+// zieht GPIO0 beim Öffnen mancher Terminals auf GND.
 // ---------------------------------------------------------------------------
 
-static String statusJson() {
-  char buf[768];
-  snprintf(buf, sizeof(buf),
-           "{\"device\":\"%s\",\"uptime_s\":%lu,"
-           "\"gps\":{\"fix\":%s,\"valid\":%s,\"latitude\":%.6f,\"longitude\":%.6f,\"altitude_m\":%.1f,"
-           "\"speed_kmh\":%.1f,\"course\":%.0f,\"satellites\":%d,\"hdop\":%.1f,\"utc\":\"%s\"},"
-           "\"power\":{\"external\":%s,\"source\":\"%s\",\"sensed\":%s,\"battery_mv\":%d,\"battery_percent\":%d,\"charging\":%s},"
-           "\"mobile\":{\"connected\":%s,\"ip\":\"%s\",\"rssi\":%d},"
-           "\"hotspot\":{\"ssid\":\"%s\",\"clients\":%d},"
-           "\"report\":{\"last_http_code\":%d,\"last_ok_s_ago\":%ld}}",
-           SECRET_DEVICE_NAME, (unsigned long)(millis() / 1000), gnssHasFix ? "true" : "false",
-           lastFix.valid ? "true" : "false", lastFix.lat, lastFix.lon, lastFix.altitude, lastFix.speedKmh,
-           lastFix.course, lastFix.satellites, lastFix.hdop, lastFix.utc, power.externalPower ? "true" : "false",
-           power.externalPower ? "netz" : "akku", power.sensed ? "true" : "false", power.batteryMv,
-           power.batteryPercent, power.charging ? "true" : "false", PPP.connected() ? "true" : "false", PPP.localIP().toString().c_str(),
-           pppRssi, SECRET_AP_SSID, WiFi.AP.stationCount(), lastHttpCode,
-           lastReportOkAt ? (long)((millis() - lastReportOkAt) / 1000) : -1L);
-  return String(buf);
-}
-
-static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
-<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Traktor</title>
-<style>body{font-family:system-ui,sans-serif;margin:16px;max-width:480px}td{padding:4px 8px}td:first-child{color:#666}</style>
-</head><body><h1>Traktor</h1><table id="t"></table>
-<script>
-async function upd(){try{const s=await (await fetch('/status')).json();const g=s.gps,p=s.power;
-const rows=[['Position',g.valid?`<a href="https://www.openstreetmap.org/?mlat=${g.latitude}&mlon=${g.longitude}#map=16/${g.latitude}/${g.longitude}">${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)}</a>`+(g.fix?'':' (letzte)'):'kein GPS-Fix'],
-['Tempo',g.speed_kmh.toFixed(1)+' km/h'],['Satelliten',g.satellites],
-['Strom',(p.external?'Netz':'Akku')+(p.sensed?'':' (geschätzt)')],['Akku',p.battery_percent+' % ('+(p.battery_mv/1000).toFixed(2)+' V)'+(p.charging?', lädt':'')],
-['Mobilfunk',s.mobile.connected?'verbunden, RSSI '+s.mobile.rssi:'getrennt'],['Hotspot',s.hotspot.clients+' Gerät(e)'],
-['Home Assistant',s.report.last_ok_s_ago<0?'noch nichts gemeldet':'vor '+s.report.last_ok_s_ago+' s, HTTP '+s.report.last_http_code]];
-document.getElementById('t').innerHTML=rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');}catch(e){}}
-upd();setInterval(upd,5000);
-</script></body></html>)HTML";
-
-static void startWebServer() {
-  server.on("/", [] { server.send_P(200, "text/html; charset=utf-8", INDEX_HTML); });
-  server.on("/status", [] {
-    server.sendHeader("Access-Control-Allow-Origin", "*");
-    server.send(200, "application/json", statusJson());
-  });
-  server.onNotFound([] { server.send(404, "text/plain", "nicht gefunden"); });
-  server.begin();
+static void checkSerialCommand() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line == "factory-reset") {
+    Serial.println("Werkseinstellungen, Neustart");
+    settingsFactoryReset();
+    delay(200);
+    ESP.restart();
+  }
 }
 
 // ---------------------------------------------------------------------------
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  Serial.println("\nTraktor-Tracker startet");
-
+  Serial.setTimeout(50);
   powerInit();
+  settingsLoad();
+  uint32_t now = millis();
+
+  if (rtcFix.valid) {
+    status.fix.valid = true;
+    status.fix.lat = rtcFix.lat;
+    status.fix.lon = rtcFix.lon;
+    status.fix.altitude = rtcFix.altitude;
+    status.fix.hdop = rtcFix.hdop;
+    status.fix.satellites = rtcFix.satellites;
+  }
+
+  if (rtcSleeping && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+    status.power = powerRead(0);
+    if (!status.power.externalPower) {
+      // Kurz wach: nur prüfen, ob es Zeit für eine Meldung ist.
+      rtcMinutesSinceReport += settings.sleepCheckMin;
+      if (rtcMinutesSinceReport < settings.sleepReportMin) sleepNow();
+      rtcMinutesSinceReport = 0;
+      Serial.println("Aus dem Tiefschlaf: Position melden");
+      status.mode = Mode::WakeReport;
+      status.modeReason = "Meldung aus dem Tiefschlaf";
+      wakeStartedAt = now;
+      WiFi.mode(WIFI_OFF);
+      Network.onEvent(onNetworkEvent);
+      modemStart();
+      return;
+    }
+  }
+  rtcSleeping = false;
+
+  Serial.println("\nLTE-Router startet");
   Network.onEvent(onNetworkEvent);
   startHotspot();
-  startWebServer();
+  modemStart();
+  if (!settingsConfigured()) Serial.println("Noch nicht eingerichtet: http://192.168.4.1/setup");
 
-  if (!modemPowerOn()) {
-    Serial.println("Modem antwortet nicht, Neustart");
-    delay(1000);
-    ESP.restart();
+  status.power = powerRead(0);
+  status.modeSince = now;
+  lastMovedAt = now;
+  nextReportAt = now;
+  if (!status.power.externalPower) {
+    batterySince = now;
+    status.mode = Mode::Battery;
+    status.modeReason = "Start auf Akku";
+  } else {
+    status.modeReason = "am Netz";
   }
-  gnssEnable();
-  startMobile();
-
-  power = powerRead(modemSupplyMv());
-  lastSeenExternalPower = power.externalPower;
-  nextReportAt = millis();
 }
 
 void loop() {
-  server.handleClient();
   uint32_t now = millis();
+  static uint32_t lastPowerRead = 0;
+  if (now - lastPowerRead >= 1000) {
+    lastPowerRead = now;
+    status.power = powerRead(status.modemMv);
+  }
+  if (moving()) lastMovedAt = now;
+  checkSerialCommand();
 
-  if (now - lastGnssPoll >= GNSS_POLL_INTERVAL_S * 1000UL) {
-    lastGnssPoll = now;
-    GnssFix fix;
-    gnssHasFix = gnssRead(fix);
-    if (gnssHasFix) lastFix = fix;
-    pppRssi = PPP.RSSI();
-    power = powerRead(modemSupplyMv());
+  if (status.mode == Mode::WakeReport) {
+    handleWake(now);
+    delay(20);
+    return;
   }
 
-  // Wechsel zwischen Netz und Akku sofort melden.
-  if (power.externalPower != lastSeenExternalPower) {
-    lastSeenExternalPower = power.externalPower;
-    Serial.printf("Stromversorgung: %s\n", power.externalPower ? "Netz" : "Akku");
-    nextReportAt = now;
-  }
-  bool moving = gnssHasFix && lastFix.speedKmh >= MOVING_SPEED_KMH;
-  uint32_t interval = (moving ? REPORT_INTERVAL_MOVING_S : REPORT_INTERVAL_PARKED_S) * 1000UL;
-  // Losfahren: nicht das lange Stand-Intervall abwarten.
-  if ((int32_t)(nextReportAt - now) > (int32_t)interval) nextReportAt = now + interval;
-  if ((int32_t)(now - nextReportAt) >= 0) {
-    // Fehlgeschlagen: in 30 s nochmal.
-    nextReportAt = now + (reportToHomeAssistant() ? interval : 30000UL);
-  }
+  webLoop();
+  updateMode(now);
+  handleReports(now);
 
   if (pppLostSince && now - pppLostSince > PPP_RESTART_AFTER_S * 1000UL) {
     Serial.println("Mobilfunk zu lange weg, Neustart");
     delay(500);
     ESP.restart();
   }
-
   delay(5);
 }

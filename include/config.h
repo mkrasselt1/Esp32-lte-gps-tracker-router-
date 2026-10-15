@@ -1,5 +1,6 @@
 #pragma once
-// Hardware und Verhalten. Zugangsdaten stehen in secrets.h (siehe secrets.example.h).
+// Hardware und feste Zeiten. Alles, was der Betreiber einstellt (APN, PIN,
+// WLAN, Meldeziel, Energiesparen), steht in den Einstellungen der Weboberfläche.
 
 // ---------------------------------------------------------------------------
 // Board: genau eins auswählen. Pins laut LilyGO (examples/*/utilities.h und
@@ -62,22 +63,15 @@
 #define BATTERY_CHARGING_MV 4180
 
 // ---------------------------------------------------------------------------
-// Hotspot
+// Feste Zeiten
 // ---------------------------------------------------------------------------
-#define AP_MAX_CLIENTS 2
-#define AP_CHANNEL     6
-#define AP_IP          192, 168, 4, 1
-#define AP_DHCP_START  192, 168, 4, 2
-#define AP_DNS         1, 1, 1, 1
-
-// ---------------------------------------------------------------------------
-// Meldungen an Home Assistant (GPSLogger-Integration)
-// ---------------------------------------------------------------------------
-#define REPORT_INTERVAL_MOVING_S  30   // solange der Traktor fährt
-#define REPORT_INTERVAL_PARKED_S  300  // im Stand
-#define MOVING_SPEED_KMH          3.0f
-#define GNSS_POLL_INTERVAL_S      5
-#define HTTP_TIMEOUT_MS           15000
-
-// Ohne Mobilfunkverbindung so lange warten, dann ESP32 und Modem neu starten.
-#define PPP_RESTART_AFTER_S       300
+#define GNSS_POLL_INTERVAL_S  5
+#define MOVING_SPEED_KMH      3.0f
+#define HTTP_TIMEOUT_MS       15000
+#define MODEM_RETRY_S         30    // nach Fehler beim Modemstart
+// Ohne Mobilfunk so lange warten, dann neu starten.
+#define PPP_RESTART_AFTER_S   300
+// Aus dem Tiefschlaf geweckt: so lange auf einen GPS-Fix warten.
+#define WAKE_FIX_TIMEOUT_S    150
+// ... und insgesamt höchstens so lange wach bleiben.
+#define WAKE_MAX_AWAKE_S      300
