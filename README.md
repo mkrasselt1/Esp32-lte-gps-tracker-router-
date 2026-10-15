@@ -25,7 +25,6 @@ Firmware für ein LilyGO-LTE-Board im Traktor. Sie macht drei Dinge gleichzeitig
 5. Bauen und flashen:
 
    ```sh
-   cd tracker
    pio run -t upload
    pio device monitor
    ```
