@@ -51,7 +51,7 @@ const rows=[['Betrieb',esc(s.mode.name)+(s.mode.reason?` <small>${esc(s.mode.rea
 ['Tempo / Richtung',g.valid?g.speed_kmh.toFixed(1)+' km/h'+(g.speed_kmh>=3?', '+g.course+'°':''):'–'],
 ['Strom',(p.external?'Netz':'Akku')+(p.sensed?'':' <small>(geschätzt)</small>')],
 ['Akku',p.battery_percent+' % <small>'+(p.battery_mv/1000).toFixed(2)+' V'+(p.charging?', lädt':'')+'</small>'],
-['Mobilfunk',`<span class=${m.connected?'ok':'bad'}>${esc(m.state)}</span>`+(m.rssi<99?` <small>Signal ${m.rssi}/31</small>`:'')],
+['Mobilfunk',`<span class=${m.connected?'ok':'bad'}>${esc(m.state)}</span>`+(m.operator?' · '+esc(m.operator):'')+(m.rssi<99?` <small>Signal ${m.rssi}/31</small>`:'')+(m.ip?`<br><small>IP ${esc(m.ip)}</small>`:'')],
 ['WLAN',s.hotspot.active?esc(s.hotspot.ssid)+', '+s.hotspot.clients+' Gerät(e)':'aus'],
 ['Meldungen',!s.report.enabled?'aus':s.report.last_ok_s_ago<0?'noch keine'+(s.report.last_http_code?' <small class=bad>(HTTP '+s.report.last_http_code+')</small>':''):age(s.report.last_ok_s_ago)]];
 document.getElementById('t').innerHTML=rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');}catch(e){}}
@@ -62,7 +62,7 @@ static const char SETTINGS_HTML[] PROGMEM = PAGE_HEAD("Einstellungen") R"HTML(
 <h1>Einstellungen</h1><nav><a href="/">Status</a><a href="/settings">Einstellungen</a></nav>
 <form id=f>
 <section><h2>Mobilfunk</h2>
-<label>APN</label><input name=apn required>
+<label>APN <small>("auto" = passend zur SIM wählen)</small></label><input name=apn required>
 <label>APN-Benutzer <small>(meist leer)</small></label><input name=apnUser autocomplete=off>
 <label>APN-Passwort <small>(leer lassen = unverändert)</small></label><input name=apnPass type=password autocomplete=new-password>
 <label><input type=checkbox name=apnPassClear value=1 style="width:auto"> APN-Passwort löschen</label>
@@ -137,7 +137,7 @@ static const char SETUP_HTML[] PROGMEM = PAGE_HEAD("Einrichtung") R"HTML(
 <label>Admin-Passwort (mind. 8 Zeichen)</label><input name=adminPass type=password minlength=8 required autocomplete=new-password>
 <label>Admin-Passwort wiederholen</label><input name=adminPass2 type=password minlength=8 required autocomplete=new-password>
 <label>Neues WLAN-Passwort <small>(empfohlen, mind. 8 Zeichen)</small></label><input name=apPass type=password minlength=8 autocomplete=new-password>
-<label>APN</label><input name=apn value="internet" required>
+<label>APN <small>("auto" = passend zur SIM wählen)</small></label><input name=apn value="auto" required>
 <label>SIM-PIN <small>(leer, wenn die SIM keine hat)</small></label><input name=simPin type=password inputmode=numeric autocomplete=off>
 </section><button>Speichern und neu starten</button> <small id=msg></small></form>
 <script>
@@ -298,8 +298,15 @@ static void handleSetupPost() {
 void webStart() {
   if (started) return;
   started = true;
+  // Der Status ist ohne Login lesbar, damit andere Geräte im WLAN ihn abfragen
+  // können. Er enthält keine Zugangsdaten; Einstellungen bleiben geschützt.
   server.on("/", HTTP_GET, [] {
-    if (authorized()) server.send_P(200, "text/html; charset=utf-8", STATUS_HTML);
+    if (!settingsConfigured()) {
+      server.sendHeader("Location", "/setup");
+      server.send(302, "text/plain", "");
+      return;
+    }
+    server.send_P(200, "text/html; charset=utf-8", STATUS_HTML);
   });
   server.on("/settings", HTTP_GET, [] {
     if (authorized()) server.send_P(200, "text/html; charset=utf-8", SETTINGS_HTML);
@@ -313,9 +320,7 @@ void webStart() {
     server.send_P(200, "text/html; charset=utf-8", SETUP_HTML);
   });
   server.on("/setup", HTTP_POST, handleSetupPost);
-  server.on("/api/status", HTTP_GET, [] {
-    if (authorized()) sendJson(statusJson());
-  });
+  server.on("/api/status", HTTP_GET, [] { sendJson(statusJson()); });
   server.on("/api/settings", HTTP_GET, handleSettingsGet);
   server.on("/api/settings", HTTP_POST, handleSettingsPost);
   server.on("/api/clients", HTTP_GET, [] {

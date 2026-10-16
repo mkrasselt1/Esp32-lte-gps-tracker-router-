@@ -243,6 +243,9 @@ static void checkSerialCommand() {
     settingsFactoryReset();
     delay(200);
     ESP.restart();
+  } else if (line == "status") {
+    // Zustand über USB ausgeben, ohne Login und ohne Datenverkehr über die SIM.
+    Serial.println(statusJson());
   }
 }
 

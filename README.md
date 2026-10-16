@@ -46,7 +46,11 @@ die PPP- und NAT-Unterstützung fehlt.
 | `/api/status` | Status als JSON |
 
 Die Anmeldung läuft per HTTP-Digest (Benutzer `admin`), das Passwort geht
-also nicht im Klartext übers WLAN.
+also nicht im Klartext übers WLAN. Der Status (`/` und `/api/status`) ist
+ohne Anmeldung lesbar, damit andere Geräte im WLAN ihn abfragen können; er
+enthält keine Zugangsdaten, wohl aber die Position.
+
+Über USB gibt `status` im seriellen Monitor denselben Status als JSON aus.
 
 **Passwort vergessen?** Per USB den seriellen Monitor öffnen (115200 Baud)
 und `factory-reset` eingeben. Danach gelten wieder die Werkseinstellungen.
@@ -82,6 +86,13 @@ ist es aus.
   falsch, versucht sie es nicht erneut, damit die SIM nicht gesperrt wird.
   Die Statusseite zeigt dann „SIM-PIN falsch oder fehlt“. Neue PIN eintragen
   und speichern.
+- **APN**: `auto` (Voreinstellung) wählt den Zugangspunkt wie ein Handy
+  anhand der SIM: Aus der IMSI (`AT+CIMI`) kommen Länder- und Netzkennung
+  (MCC/MNC), dazu steht in `src/Modem.cpp` eine kleine Tabelle der
+  deutschen Netze und einiger Nachbarländer. Unbekannte Netze bekommen
+  `internet`. Discounter wie FONIC oder Aldi Talk laufen unter der Kennung
+  ihres Wirtsnetzes; braucht ein Tarif einen eigenen APN, ihn von Hand
+  eintragen, das hat immer Vorrang.
 - **APN-Benutzer und -Passwort** brauchen die meisten Tarife heute nicht.
   Manche Firmen-, IoT- und ausländische Tarife verlangen sie noch, deshalb
   sind die Felder da und dürfen leer bleiben. Sie werden per PAP übergeben und zusätzlich im
@@ -223,10 +234,18 @@ GND, und in `config.h` `PIN_POWER_SENSE` auf 34 setzen.
 
 ## Stand
 
-Die Firmware baut für beide Boards. Der GNSS-Parser ist gegen
-Beispielantworten von SIM7600 und A7670 geprüft, die Weboberfläche gegen eine
-nachgebaute API im Browser. **Auf echter Hardware lief sie noch nicht.**
-Am ehesten hakt es bei:
+Die Firmware baut für beide Boards. Auf einem **T-SIM7600E** geprüft:
+Start, Hotspot, Einrichtung, Modem mit LTE-Einbuchung (O2/FONIC), APN
+automatisch, PPP im CMUX-Modus mit AT-Befehlen nebenher (`AT+CBC`) sowie die
+Netzerkennung über GPIO35 (mit USB ~140 mV, auf Akku die Akkuspannung).
+Noch nicht auf Hardware geprüft: Internet über den Hotspot unter Last, GPS,
+Display, Energiesparen und Tiefschlaf.
+
+Nach einem Neustart des ESP32 hängt das Modem noch im CMUX-Modus und
+versteht kein AT. Die Firmware erkennt das, schaltet es aus und wieder ein;
+bis zur Verbindung dauert es dann rund eine Minute.
+
+Am ehesten hakt es noch bei:
 
 - **Pins**: Sie stammen aus LilyGOs Beispielen. Bei Schweigen des Modems
   zuerst die DIP-Schalter prüfen, dann TX/RX in `config.h` tauschen.

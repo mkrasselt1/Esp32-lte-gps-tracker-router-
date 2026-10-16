@@ -22,6 +22,7 @@ struct Status {
   int modemMv = 0;
   int rssi = 99;            // AT+CSQ, 99 = unbekannt
   const char *modemState = "startet";
+  char operatorName[32] = "";  // Netzbetreiber beim Einbuchen, z. B. "FONIC+"
   bool online = false;      // PPP hat eine IP
 
   Mode mode = Mode::Normal;

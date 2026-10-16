@@ -131,7 +131,81 @@ static Sim unlockSim() {
   return Sim::Error;
 }
 
+// ---------------------------------------------------------------------------
+// APN automatisch nach SIM: wie ein Handy aus MCC+MNC (den ersten fünf Ziffern
+// der IMSI) den passenden Zugangspunkt wählen. Nur die gängigen Netze; ein im
+// Setup eingetragener APN hat immer Vorrang. MVNOs (Aldi Talk, 1&1 …) teilen
+// sich MCC/MNC mit ihrem Wirtsnetz und bekommen dessen APN — notfalls von Hand
+// setzen.
+// ---------------------------------------------------------------------------
+struct ApnEntry {
+  const char *plmn;  // MCC+MNC, die ersten Ziffern der IMSI
+  const char *apn;
+  const char *user;
+  const char *pass;
+};
+static const ApnEntry APN_TABLE[] = {
+    // Deutschland
+    {"26201", "internet.telekom", "", ""},  // Telekom
+    {"26206", "internet.telekom", "", ""},  // Telekom
+    {"26202", "web.vodafone.de", "", ""},   // Vodafone
+    {"26204", "web.vodafone.de", "", ""},   // Vodafone
+    {"26209", "web.vodafone.de", "", ""},   // Vodafone
+    {"26203", "internet", "", ""},          // o2/Telefónica
+    {"26207", "internet", "", ""},          // o2/Telefónica
+    {"26208", "internet", "", ""},          // o2/Telefónica
+    {"26211", "internet", "", ""},          // o2/Telefónica
+    {"26277", "internet", "", ""},          // o2/Telefónica
+    // einige Nachbarländer
+    {"23201", "a1.net", "", ""},                       // A1 (AT)
+    {"23203", "internet.t-mobile", "t-mobile", "tm"},  // Magenta (AT)
+    {"22801", "gprs.swisscom.ch", "", ""},             // Swisscom (CH)
+};
+
+// Zugangsdaten des laufenden Verbindungsversuchs (aus Einstellung oder Tabelle).
+static String effApn, effUser, effPass;
+
+// IMSI vom Modem holen (AT+CIMI). Liefert die reinen Ziffern, sonst leer.
+static String readImsi() {
+  String r = rawCmd("AT+CIMI", 3000);
+  String digits;
+  for (char c : r)
+    if (c >= '0' && c <= '9') digits += c;
+  return digits.length() >= 10 ? digits : String();
+}
+
+// Setzt effApn/effUser/effPass: eingestellter APN hat Vorrang, sonst nach IMSI
+// aus der Tabelle, sonst der generische Rückfall "internet".
+static void resolveApn() {
+  if (!settings.apn.isEmpty() && !settings.apn.equalsIgnoreCase("auto")) {
+    effApn = settings.apn;
+    effUser = settings.apnUser;
+    effPass = settings.apnPass;
+    Serial.printf("APN eingestellt: %s\n", effApn.c_str());
+    return;
+  }
+  String imsi = readImsi();
+  for (const ApnEntry &e : APN_TABLE) {
+    if (imsi.startsWith(e.plmn)) {
+      effApn = e.apn;
+      effUser = e.user;
+      effPass = e.pass;
+      Serial.printf("APN automatisch: %s (PLMN %s)\n", effApn.c_str(), e.plmn);
+      return;
+    }
+  }
+  effApn = "internet";
+  effUser = "";
+  effPass = "";
+  Serial.printf("APN nicht erkannt (IMSI %s), Rückfall \"internet\"\n", imsi.isEmpty() ? "?" : imsi.c_str());
+}
+
 static void configureModem() {
+  // Volle Funktion und automatische Netzregistrierung erzwingen. Das Modem
+  // kann aus einer früheren Sitzung abgemeldet sein ("AT+COPS: 2") und bucht
+  // sich dann von allein nicht wieder ein, obwohl SIM und Empfang da sind.
+  rawCmd("AT+CFUN=1", 10000);
+  rawCmd("AT+COPS=0", 5000);
 #if defined(BOARD_T_SIM7600)
   // Die GNSS-Antenne hängt an AUXVDD des Modems.
   rawCmd("AT+CVAUXV=2800", 2000);
@@ -142,8 +216,8 @@ static void configureModem() {
 #endif
   // APN-Zugangsdaten auch im Modem hinterlegen: lwIP kann nur PAP, manche
   // Netze wollen CHAP. Typ 1 = PAP, 2 = CHAP, 3 = beides.
-  if (!settings.apnUser.isEmpty()) {
-    rawCmd("AT+CGAUTH=1,3,\"" + settings.apnPass + "\",\"" + settings.apnUser + "\"", 5000);
+  if (!effUser.isEmpty()) {
+    rawCmd("AT+CGAUTH=1,3,\"" + effPass + "\",\"" + effUser + "\"", 5000);
   } else {
     rawCmd("AT+CGAUTH=1,0", 5000);
   }
@@ -151,19 +225,20 @@ static void configureModem() {
 
 static bool startData() {
   Serial1.end();  // PPP öffnet den UART selbst
-  PPP.setApn(settings.apn.c_str());
+  PPP.setApn(effApn.c_str());
   PPP.setPin(NULL);  // schon entsperrt
   PPP.setPins(PIN_MODEM_TX, PIN_MODEM_RX);
   if (!PPP.begin(PPP_MODEM_SIM7600, 1, MODEM_BAUD)) return false;
-  if (!settings.apnUser.isEmpty()) {
-    esp_netif_ppp_set_auth(PPP.netif(), NETIF_PPP_AUTHTYPE_PAP, settings.apnUser.c_str(), settings.apnPass.c_str());
+  if (!effUser.isEmpty()) {
+    esp_netif_ppp_set_auth(PPP.netif(), NETIF_PPP_AUTHTYPE_PAP, effUser.c_str(), effPass.c_str());
   }
 
   status.modemState = "sucht Netz";
   uint32_t start = millis();
   while (!PPP.attached() && millis() - start < 120000) delay(1000);
   if (!PPP.attached()) return false;
-  Serial.printf("Netz: %s, RSSI %d\n", PPP.operatorName().c_str(), PPP.RSSI());
+  strlcpy(status.operatorName, PPP.operatorName().c_str(), sizeof(status.operatorName));
+  Serial.printf("Netz: %s, RSSI %d\n", status.operatorName, PPP.RSSI());
 
   // CMUX: Daten und AT-Befehle gleichzeitig, sonst kein GNSS bei laufendem Hotspot.
   status.modemState = "verbindet";
@@ -208,6 +283,7 @@ static void modemTask(void *) {
       waitRetry(sim == Sim::NoSim ? "keine SIM-Karte" : "SIM-Fehler");
       continue;
     }
+    resolveApn();
     configureModem();
     if (!startData()) {
       PPP.end();
