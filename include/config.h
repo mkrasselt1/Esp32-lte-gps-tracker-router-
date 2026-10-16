@@ -71,6 +71,10 @@
 #define MODEM_RETRY_S         30    // nach Fehler beim Modemstart
 // Ohne Mobilfunk so lange warten, dann neu starten.
 #define PPP_RESTART_AFTER_S   300
+// Akku gilt erst als leer, wenn die Ruhespannung (höchster Wert der letzten
+// Minute) so lange unter der Schwelle liegt. Beim Senden zieht das Modem bis
+// zu 2 A, dann bricht die Spannung kurz um mehrere hundert mV ein.
+#define LOW_BATTERY_HOLD_S    120
 // ---------------------------------------------------------------------------
 // Tiefschlaf
 // ---------------------------------------------------------------------------

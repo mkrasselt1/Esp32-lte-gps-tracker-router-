@@ -11,7 +11,7 @@ static const int CURVE[][2] = {
     {3700, 38},  {3650, 26}, {3600, 18}, {3500, 9},  {3400, 4},  {3300, 0},
 };
 
-static int percentFromMv(int mv) {
+int percentFromMv(int mv) {
   const int n = sizeof(CURVE) / sizeof(CURVE[0]);
   if (mv >= CURVE[0][0]) return 100;
   if (mv <= CURVE[n - 1][0]) return 0;

@@ -60,7 +60,13 @@ Betriebsstufe, Tiefschlaf, Zeit bis zur Verbindung und zum GPS-Fix, jeweils mit
 Akkuspannung. Es liegt im Flash, übersteht also Tiefschlaf und Stromausfall,
 und hält die letzten 32 Einträge. Damit lässt sich ein Tag auf Akku auch ohne
 WLAN nachvollziehen. `log-clear` leert es. Die Zeiten sind UTC, sobald einmal
-ein GPS-Fix da war; davor stehen Sekunden seit dem Einschalten.
+ein GPS-Fix da war; davor stehen Sekunden seit dem Einschalten. Beim Aufwachen
+steht dahinter, wie oft der ULP im Schlaf gemessen hat und was zuletzt.
+
+Zum Testen des Energiesparens: `set` zeigt die Zeiten, `set hotspotIdleMin 2`
+ändert eine sofort (ohne Weboberfläche, gleiche Grenzen). `sleep` schickt das
+Gerät gleich in den Tiefschlaf, `sleep 600` mit Wecken nach 600 s, `sleep 600
+60` erst in 60 s.
 
 **Passwort vergessen?** Per USB den seriellen Monitor öffnen (115200 Baud)
 und `factory-reset` eingeben. Danach gelten wieder die Werkseinstellungen.
@@ -133,11 +139,14 @@ sind in der Weboberfläche einstellbar (0 schaltet eine Regel ab):
 2. **Sparmodus**: WLAN aus, LTE und GPS an. Meldungen im Stand alle 15 min,
    in Fahrt jede Minute.
 3. **Tiefschlaf** nach so langem Stillstand im Sparmodus (Standard 60 min)
-   oder sofort, wenn der Akku unter den Mindeststand fällt (Standard 15 %).
+   oder wenn der Akku unter den Mindeststand fällt (Standard 15 %). Beim
+   Senden bricht die Spannung kurz um mehrere hundert mV ein; maßgeblich ist
+   deshalb die höchste Spannung der letzten Minute, und sie muss zwei Minuten
+   lang darunter liegen.
    Modem aus, ESP32 im Tiefschlaf. Geweckt wird er durch:
    - **Netzstrom**: Der ULP-Koprozessor, ein Mini-Prozessor im RTC-Teil des
-     ESP32, misst im Schlaf jede Sekunde die Spannung und weckt den ESP32,
-     sobald Strom da ist. Dann startet alles normal, mit Hotspot.
+     ESP32, misst im Schlaf alle ein bis zwei Sekunden die Spannung und weckt
+     den ESP32, sobald Strom da ist. Dann startet alles normal, mit Hotspot.
    - **Meldezeit**: Alle 120 min schaltet er das Modem ein, wartet auf eine
      Position, meldet und schläft weiter. Bewegt sich das Gerät dabei, bleibt
      es wach im Sparmodus.
@@ -198,9 +207,10 @@ liest 0. Die Akkuspannung kommt in dieser Zeit vom Modem (`AT+CBC`); weil der
 Akku dabei lädt, liegt der Prozentwert zu hoch.
 
 Externe Versorgung nur über USB-C oder VBUS, **höchstens 5 V**, mit
-mindestens 2 A. Der Solar-Eingang lädt nur den Akku. Laut LilyGO kann das
-Board beim Umschalten zwischen Netz und Akku neu starten; die Firmware meldet
-nach jedem Start sofort.
+mindestens 2 A. Der Solar-Eingang lädt nur den Akku. Beim Umschalten zwischen
+Netz und Akku bricht die Versorgung kurz ein, der ESP32 startet dann neu
+(„Neustart nach Unterspannung" im Log), auch bei vollem Akku. Das kennt auch
+LilyGO; die Firmware startet in der passenden Betriebsstufe und meldet sofort.
 
 **T-A7670 und andere:** Ohne Zusatz wird aus der Akkuspannung geschätzt
 (über 4,18 V gilt als „lädt“), das ist ungenau. Zuverlässig wird es mit zwei
@@ -226,7 +236,9 @@ automatisch, PPP im CMUX-Modus mit AT-Befehlen nebenher (`AT+CBC`,
 Hotspot am Handy sowie die Netzerkennung über GPIO35 (mit USB ~140 mV, auf
 Akku die Akkuspannung). Zieht ein Gerät viele Daten, meldet lwIP gelegentlich
 `pppos_input_tcpip failed` und verwirft Pakete; das bremst, trennt aber
-nicht. Noch nicht auf Hardware geprüft: Energiesparen und Tiefschlaf.
+nicht. Auf Akku geprüft: Sparmodus nach der eingestellten Zeit ohne Gerät,
+Tiefschlaf nach Stillstand, Aufwecken per ULP beim Einstecken von USB. Noch
+nicht geprüft: Wecken zur Meldung aus dem Tiefschlaf und der Ruhestrom.
 
 Nach einem Neustart des ESP32 hängt das Modem noch im CMUX-Modus. Die
 Firmware beendet den Multiplexer (Close-Down-Rahmen) und arbeitet ohne
@@ -241,6 +253,8 @@ Am ehesten hakt es noch bei:
   zuerst die DIP-Schalter prüfen, dann TX/RX in `config.h` tauschen.
 - **CMUX auf dem A7670**: esp-modem unterstützt CMUX für den SIM7600, beim
   A7670 wird derselbe Treiber verwendet.
-- **Tiefschlaf**: Ruhestrom des Boards, sicheres Abschalten des Modems und
-  die ULP-Schwelle für Netzstrom sind ungemessen. Wacht das Gerät im Schlaf
-  ständig auf oder gar nicht, `ULP_VBUS_RAW_BELOW` in `config.h` anpassen.
+- **Tiefschlaf**: Der Ruhestrom des Boards ist ungemessen. Beim Einschlafen
+  schaltet ESP-IDF den SAR-ADC ab; der ULP schaltet ihn deshalb für jede
+  Messung selbst ein. Wacht das Gerät im Schlaf ständig auf oder gar nicht,
+  im Log die ULP-Werte ansehen und `ULP_VBUS_RAW_BELOW` in `config.h`
+  anpassen.

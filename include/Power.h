@@ -10,6 +10,8 @@ struct PowerState {
 };
 
 void powerInit();
+// Ladestand in Prozent aus der Ruhespannung einer LiPo-Zelle.
+int percentFromMv(int mv);
 // modemMv: Versorgungsspannung laut Modem (AT+CBC), 0 wenn unbekannt. Wird
 // gebraucht, wenn der Akku-ADC bei Netzbetrieb abgetrennt ist.
 PowerState powerRead(int modemMv);

@@ -50,6 +50,9 @@ static uint32_t lastClientAt = 0;   // zuletzt ein Gerät im Hotspot
 static uint32_t lastMovedAt = 0;
 static uint32_t trackerSince = 0;
 static uint32_t wakeStartedAt = 0;
+static uint32_t batteryLowSince = 0;  // 0 = Akku nicht leer
+static uint32_t sleepRequestAt = 0;   // über USB angeforderter Tiefschlaf, 0 = keiner
+static uint32_t sleepRequestWakeIn = 0;
 
 static bool moving() { return status.hasFix && status.fix.speedKmh >= MOVING_SPEED_KMH; }
 
@@ -139,8 +142,9 @@ static void holdPinsForSleep() {
   gpio_deep_sleep_hold_en();
 }
 
-// Meldet ein letztes Mal, schaltet alles ab und schläft.
-[[noreturn]] static void enterDeepSleep(const char *reason) {
+// Meldet ein letztes Mal, schaltet alles ab und schläft. wakeInS: nächste
+// Meldung nach so vielen Sekunden statt nach dem eingestellten Intervall.
+[[noreturn]] static void enterDeepSleep(const char *reason, uint32_t wakeInS = 0) {
   Serial.printf("Tiefschlaf: %s\n", reason);
   status.modeReason = reason;
   bool sent = reportSend();
@@ -149,7 +153,7 @@ static void holdPinsForSleep() {
   if (status.fix.valid) {
     rtcFix = {true, status.fix.lat, status.fix.lon, status.fix.altitude, status.fix.hdop, status.fix.satellites};
   }
-  sleepScheduleReport();
+  sleepScheduleReport(wakeInS);
   stopHotspot();
   modemShutdown();
   holdPinsForSleep();
@@ -171,10 +175,7 @@ static void updateMode(uint32_t now) {
     setMode(Mode::Battery, "Netzstrom weg");
   }
 
-  if (settings.lowBatteryPercent && status.power.batteryMv > 0 &&
-      status.power.batteryPercent <= settings.lowBatteryPercent) {
-    enterDeepSleep("Akku fast leer");
-  }
+  if (batteryLowSince && now - batteryLowSince >= LOW_BATTERY_HOLD_S * 1000UL) enterDeepSleep("Akku fast leer");
 
   if (status.mode == Mode::Battery) {
     if (clientsConnected() > 0) lastClientAt = now;
@@ -198,6 +199,24 @@ static void updateMode(uint32_t now) {
   if (status.mode == Mode::Tracker && settings.sleepAfterParkedMin) {
     uint32_t still = now - max(lastMovedAt, trackerSince);
     if (still >= settings.sleepAfterParkedMin * 60000UL) enterDeepSleep("Stillstand");
+  }
+}
+
+// Einmal pro Sekunde nach powerRead(): Ist der Akku leer? Maßgeblich ist die
+// höchste Spannung der letzten Minute, also die Ruhespannung zwischen den
+// Sendepausen; die kurzen Einbrüche beim Senden zählen nicht.
+static void trackBatteryLow(uint32_t now) {
+  static int window[60] = {};
+  static uint8_t pos = 0;
+  window[pos] = status.power.externalPower ? 0 : status.power.batteryMv;
+  pos = (pos + 1) % 60;
+  int restMv = 0;
+  for (int mv : window) restMv = max(restMv, mv);
+  bool low = settings.lowBatteryPercent && restMv > 0 && percentFromMv(restMv) <= settings.lowBatteryPercent;
+  if (!low) {
+    batteryLowSince = 0;
+  } else if (!batteryLowSince) {
+    batteryLowSince = now;
   }
 }
 
@@ -274,6 +293,41 @@ static void logGnss(uint32_t now) {
 // zieht GPIO0 beim Öffnen mancher Terminals auf GND.
 // ---------------------------------------------------------------------------
 
+// "set <Name> <Wert>" über USB: die Zeiten des Energiesparens ohne
+// Weboberfläche ändern, mit denselben Grenzen wie dort. Wirkt sofort.
+static void setFromSerial(const String &args) {
+  struct Field {
+    const char *name;
+    uint16_t *value;
+    long lo, hi;
+  };
+  const Field fields[] = {
+      {"hotspotMaxBatteryMin", &settings.hotspotMaxBatteryMin, 0, 1440},
+      {"hotspotIdleMin", &settings.hotspotIdleMin, 0, 1440},
+      {"trackerParkedMin", &settings.trackerParkedMin, 1, 1440},
+      {"sleepAfterParkedMin", &settings.sleepAfterParkedMin, 0, 10080},
+      {"sleepReportMin", &settings.sleepReportMin, 10, 10080},
+  };
+  char name[32];
+  long v;
+  if (sscanf(args.c_str(), "%31s %ld", name, &v) == 2) {
+    for (const Field &f : fields) {
+      if (strcmp(name, f.name) != 0) continue;
+      if (v < f.lo || v > f.hi) {
+        Serial.printf("%s: erlaubt %ld bis %ld\n", f.name, f.lo, f.hi);
+        return;
+      }
+      *f.value = (uint16_t)v;
+      settingsSave();
+      Serial.printf("%s = %ld\n", f.name, v);
+      return;
+    }
+  }
+  Serial.print("set <Name> <Wert>, jetzt:");
+  for (const Field &f : fields) Serial.printf(" %s=%u", f.name, *f.value);
+  Serial.println();
+}
+
 static void checkSerialCommand() {
   if (!Serial.available()) return;
   String line = Serial.readStringUntil('\n');
@@ -290,6 +344,17 @@ static void checkSerialCommand() {
     logPrint();
   } else if (line == "log-clear") {
     logClear();
+  } else if (line == "set" || line.startsWith("set ")) {
+    setFromSerial(line.substring(3));
+  } else if (line == "sleep" || line.startsWith("sleep ")) {
+    // Tiefschlaf zum Prüfen von Abschalten und Aufwecken: "sleep 600" weckt
+    // per Zeitgeber nach 600 s, "sleep 600 60" schläft erst in 60 s ein (Zeit,
+    // um USB abzuziehen).
+    int wakeIn = 0, delayS = 0;
+    sscanf(line.c_str(), "sleep %d %d", &wakeIn, &delayS);
+    sleepRequestWakeIn = max(wakeIn, 0);
+    sleepRequestAt = millis() + max(delayS, 0) * 1000UL;
+    if (delayS > 0) Serial.printf("Tiefschlaf in %d s\n", delayS);
   } else if (line.startsWith("AT") || line.startsWith("at")) {
     // AT-Befehl ans laufende Modem durchreichen, zum Testen.
     Serial.println(modemAt(line, 10000));
@@ -301,6 +366,7 @@ static void checkSerialCommand() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(50);
+  sleepInit();
   powerInit();
   settingsLoad();
   uint32_t now = millis();
@@ -359,10 +425,12 @@ void loop() {
   if (now - lastPowerRead >= 1000) {
     lastPowerRead = now;
     status.power = powerRead(status.modemMv);
+    trackBatteryLow(now);
   }
   if (moving()) lastMovedAt = now;
   checkSerialCommand();
   logGnss(now);
+  if (sleepRequestAt && (int32_t)(now - sleepRequestAt) >= 0) enterDeepSleep("über USB angefordert", sleepRequestWakeIn);
 
   if (status.mode == Mode::WakeReport) {
     handleWake(now);

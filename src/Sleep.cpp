@@ -8,6 +8,7 @@
 #include <esp_system.h>
 #include <sys/time.h>
 #include <esp32/ulp.h>
+#include <soc/sens_reg.h>
 #include <ulp_adc.h>
 
 #include "Power.h"
@@ -37,6 +38,10 @@ static int64_t rtcSeconds() {
 #endif
 
 #ifdef ULP_PIN
+// Zwei Datenworte im RTC-Speicher hinter dem ULP-Programm, zur Diagnose:
+// Zahl der Läufe und zuletzt gemessener ADC-Rohwert.
+#define ULP_DATA 100
+
 // Kleines ULP-Programm: ADC lesen, bei Netzstrom den ESP32 wecken. Läuft
 // jede Sekunde für ein paar Mikrosekunden; der Schlafstrom steigt dadurch
 // nur wenig.
@@ -60,8 +65,22 @@ static bool startUlp() {
   };
   if (ulp_adc_init(&cfg) != ESP_OK) return false;
 
+  RTC_SLOW_MEM[ULP_DATA] = 0;
+  RTC_SLOW_MEM[ULP_DATA + 1] = 0;
   const ulp_insn_t program[] = {
+      // ESP-IDF schaltet den SAR-ADC beim Tiefschlaf hart ab (FORCE_XPD_SAR
+      // = 2); dann misst der ULP 4095 und weckt nie. Deshalb für jede Messung
+      // selbst einschalten (3), kurz einschwingen lassen (~125 µs) und danach
+      // wieder abschalten.
+      I_WR_REG(SENS_SAR_MEAS_WAIT2_REG, SENS_FORCE_XPD_SAR_S, SENS_FORCE_XPD_SAR_S + 1, 3),
+      I_DELAY(1000),
       I_ADC(R0, 0, (uint32_t)channel),
+      I_WR_REG(SENS_SAR_MEAS_WAIT2_REG, SENS_FORCE_XPD_SAR_S, SENS_FORCE_XPD_SAR_S + 1, 2),
+      I_MOVI(R2, ULP_DATA),
+      I_ST(R0, R2, 1),  // letzter ADC-Wert
+      I_LD(R1, R2, 0),
+      I_ADDI(R1, R1, 1),
+      I_ST(R1, R2, 0),  // Läufe
 #if ULP_WAKE_BELOW
       M_BGE(1, ULP_THRESHOLD),  // noch Akku -> schlafen lassen
 #else
@@ -81,7 +100,30 @@ static bool startUlp() {
 }
 #endif
 
+void sleepInit() {
+#ifdef ULP_PIN
+  // Der ULP läuft nach dem Aufwachen (und nach einem Software-Reset) weiter
+  // und schaltet den SAR-ADC jede Sekunde ab. Vor der ersten Messung der
+  // Firmware anhalten, sonst hängt analogRead() und der Watchdog schlägt zu.
+  ulp_timer_stop();
+  delay(1);  // eine laufende ULP-Messung zu Ende kommen lassen
+  REG_SET_FIELD(SENS_SAR_MEAS_WAIT2_REG, SENS_FORCE_XPD_SAR, 3);
+#endif
+}
+
 static const char *wakeText = "";
+static char wakeBuf[80];
+
+// Hängt die ULP-Diagnose aus dem letzten Schlaf an den Weckgrund an.
+static const char *withUlpDiag(const char *text) {
+#ifdef ULP_PIN
+  snprintf(wakeBuf, sizeof(wakeBuf), "%s (ULP %ux, ADC %u)", text, (unsigned)(RTC_SLOW_MEM[ULP_DATA] & 0xFFFF),
+           (unsigned)(RTC_SLOW_MEM[ULP_DATA + 1] & 0xFFFF));
+  return wakeBuf;
+#else
+  return text;
+#endif
+}
 
 static const char *resetText() {
   switch (esp_reset_reason()) {
@@ -109,22 +151,22 @@ Wake sleepWakeReason() {
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_ULP) {
-    wakeText = "geweckt durch Netzstrom (ULP)";
+    wakeText = withUlpDiag("geweckt durch Netzstrom");
     return Wake::Normal;
   }
   if (powerRead(0).externalPower) {
-    wakeText = "geweckt, Netzstrom erkannt";
+    wakeText = withUlpDiag("geweckt, Netzstrom erkannt");
     return Wake::Normal;
   }
 
   int64_t now = rtcSeconds();
   if (cause == ESP_SLEEP_WAKEUP_EXT1) {
     rtcMotionArmedAt = now + MOTION_COOLDOWN_MIN * 60;
-    wakeText = "geweckt durch Bewegung";
+    wakeText = withUlpDiag("geweckt durch Bewegung");
     return Wake::Motion;
   }
   if (cause == ESP_SLEEP_WAKEUP_TIMER && now >= rtcNextReportAt) {
-    wakeText = "geweckt zur Meldung";
+    wakeText = withUlpDiag("geweckt zur Meldung");
     return Wake::Report;
   }
   // Zeitgeber für Bewegungssperre oder Netzstrom-Nachsehen: weiterschlafen.
@@ -132,11 +174,13 @@ Wake sleepWakeReason() {
     wakeText = "kurz geweckt, schläft weiter";
     return Wake::SleepAgain;
   }
-  wakeText = "aus dem Tiefschlaf per Reset";  // Reset-Taste o. ä.
+  wakeText = withUlpDiag("per Reset aus dem Tiefschlaf");  // Reset-Taste o. ä.
   return Wake::Normal;
 }
 
-void sleepScheduleReport() { rtcNextReportAt = rtcSeconds() + settings.sleepReportMin * 60LL; }
+void sleepScheduleReport(uint32_t inSeconds) {
+  rtcNextReportAt = rtcSeconds() + (inSeconds ? inSeconds : settings.sleepReportMin * 60LL);
+}
 
 void sleepStart() {
   int64_t now = rtcSeconds();
