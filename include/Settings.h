@@ -35,14 +35,7 @@ struct Settings {
   uint16_t sleepAfterParkedMin;   // Sparmodus -> Tiefschlaf nach so langem Stillstand
   uint16_t sleepReportMin;        // Tiefschlaf: alle so viele Minuten Position melden
   uint8_t lowBatteryPercent;      // darunter sofort Tiefschlaf
-
-  // Display
-  uint8_t displayType;   // DISPLAY_OFF, DISPLAY_SSD1306, DISPLAY_SH1106
-  bool displayFlip;      // um 180° drehen
-  bool displayWifi;      // WLAN-Name, Passwort und QR-Code anzeigen
 };
-
-enum { DISPLAY_OFF = 0, DISPLAY_SSD1306 = 1, DISPLAY_SH1106 = 2 };
 
 enum { REPORT_GPSLOGGER = 0, REPORT_JSON = 1 };
 

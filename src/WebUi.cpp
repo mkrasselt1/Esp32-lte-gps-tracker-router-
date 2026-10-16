@@ -95,13 +95,6 @@ static const char SETTINGS_HTML[] PROGMEM = PAGE_HEAD("Einstellungen") R"HTML(
 <label>Tiefschlaf: Position melden alle</label><input name=sleepReportMin type=number min=10 max=10080>
 <label>Sofort Tiefschlaf unter Akkustand (%)</label><input name=lowBatteryPercent type=number min=0 max=90>
 </section>
-<section><h2>Display</h2>
-<small>Optionales 128×64-OLED an I²C (SDA 21, SCL 22). Bild verschoben oder Streifen am Rand: anderen Controller wählen.</small>
-<label>Controller</label><select name=displayType><option value=0>kein Display</option><option value=1>SSD1306 (meist 0,96")</option><option value=2>SH1106 (meist 1,3")</option></select>
-<input type=hidden name=displayForm value=1>
-<label><input type=checkbox name=displayFlip value=1 style="width:auto"> um 180° drehen</label>
-<label><input type=checkbox name=displayWifi value=1 style="width:auto"> WLAN-Name, Passwort und QR-Code anzeigen <small>(für jeden lesbar, der aufs Display schaut)</small></label>
-</section>
 <section><h2>Zugang</h2>
 <label>Neues Admin-Passwort <small>(leer lassen = unverändert)</small></label><input name=adminPass type=password minlength=8 autocomplete=new-password>
 </section>
@@ -117,7 +110,7 @@ function fillTrig(){const t=document.getElementById('trig'),v=t.value||cur.trigg
 t.innerHTML='<option value="">— keins —</option>'+[...macs].map(m=>{const c=clients.find(x=>x.mac==m);
 return `<option value="${m}">${m}${c&&c.you?' (dieses Gerät)':''}${c?(c.connected?'':' (getrennt)'):' (nicht gesehen)'}</option>`}).join('');t.value=v;}
 async function load(){cur=await(await fetch('/api/settings')).json();
-for(const[k,v]of Object.entries(cur)){const e=f.elements[k];if(!e||e.type=='password')continue;if(e.type=='checkbox')e.checked=!!v;else e.value=v;}
+for(const[k,v]of Object.entries(cur)){const e=f.elements[k];if(e&&e.type!='password'&&e.type!='checkbox')e.value=v;}
 document.getElementById('pinInfo').textContent=cur.simPinSet?'Eine PIN ist hinterlegt.':'Keine PIN hinterlegt.';await cl();}
 async function cl(){clients=await(await fetch('/api/clients')).json();fillTrig();
 document.getElementById('cl').innerHTML=clients.length?clients.map(c=>`<tr><td>${c.mac}${c.you?'<br><small>dieses Gerät</small>':''}</td><td>${c.connected?'verbunden, '+esc(c.ip):'getrennt'}`
@@ -208,7 +201,7 @@ static void scheduleRestart() { restartAt = millis() + 1500; }
 static void handleSettingsGet() {
   if (!authorized()) return;
   const Settings &s = settings;
-  char buf[1024];
+  char buf[900];
   auto e = [](const String &v) {
     String o;
     for (char c : v) {
@@ -222,13 +215,12 @@ static void handleSettingsGet() {
            "\"simPinSet\":%s,\"reportUrl\":\"%s\",\"deviceName\":\"%s\",\"reportFormat\":%u,\"reportMovingS\":%u,"
            "\"reportParkedS\":%u,\"hotspotMaxBatteryMin\":%u,\"hotspotIdleMin\":%u,\"triggerMac\":\"%s\","
            "\"triggerGraceMin\":%u,\"trackerMovingS\":%u,\"trackerParkedMin\":%u,\"sleepAfterParkedMin\":%u,"
-           "\"sleepReportMin\":%u,\"lowBatteryPercent\":%u,\"displayType\":%u,\"displayFlip\":%s,"
-           "\"displayWifi\":%s}",
+           "\"sleepReportMin\":%u,\"lowBatteryPercent\":%u}",
            e(s.apSsid).c_str(), s.apMaxClients, s.apChannel, e(s.apn).c_str(), e(s.apnUser).c_str(),
            s.simPin.isEmpty() ? "false" : "true", e(s.reportUrl).c_str(), e(s.deviceName).c_str(), s.reportFormat,
            s.reportMovingS, s.reportParkedS, s.hotspotMaxBatteryMin, s.hotspotIdleMin, s.triggerMac.c_str(),
            s.triggerGraceMin, s.trackerMovingS, s.trackerParkedMin, s.sleepAfterParkedMin, s.sleepReportMin,
-           s.lowBatteryPercent, s.displayType, s.displayFlip ? "true" : "false", s.displayWifi ? "true" : "false");
+           s.lowBatteryPercent);
   sendJson(buf);
 }
 
@@ -268,11 +260,6 @@ static void handleSettingsPost() {
   NUM(sleepAfterParkedMin, 0, 10080);
   NUM(sleepReportMin, 10, 10080);
   NUM(lowBatteryPercent, 0, 90);
-  NUM(displayType, 0, 2);
-  if (server.hasArg("displayForm")) {
-    settings.displayFlip = server.hasArg("displayFlip");
-    settings.displayWifi = server.hasArg("displayWifi");
-  }
   if (!adminPass.isEmpty()) settings.adminPass = adminPass;
 
   settingsSave();

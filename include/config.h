@@ -63,14 +63,6 @@
 #define BATTERY_CHARGING_MV 4180
 
 // ---------------------------------------------------------------------------
-// Display (optional): 128x64 OLED an I²C, SSD1306 oder SH1106. Controller und
-// Ausrichtung stellt man in der Weboberfläche ein.
-// ---------------------------------------------------------------------------
-#define PIN_I2C_SDA     21
-#define PIN_I2C_SCL     22
-#define DISPLAY_PAGE_MS 4000  // so lange bleibt jede Seite stehen
-
-// ---------------------------------------------------------------------------
 // Feste Zeiten
 // ---------------------------------------------------------------------------
 #define GNSS_POLL_INTERVAL_S  5
