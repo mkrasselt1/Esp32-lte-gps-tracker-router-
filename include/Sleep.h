@@ -11,6 +11,9 @@ enum class Wake {
 // In setup() als Erstes: wertet den Weckgrund aus.
 Wake sleepWakeReason();
 
+// Weckgrund bzw. Grund des Starts als Text, nach sleepWakeReason().
+const char *sleepWakeText();
+
 // Nächste Meldung aus dem Tiefschlaf ab jetzt planen.
 void sleepScheduleReport();
 

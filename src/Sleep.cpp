@@ -5,6 +5,7 @@
 #include <esp32-hal-periman.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_sleep.h>
+#include <esp_system.h>
 #include <sys/time.h>
 #include <esp32/ulp.h>
 #include <ulp_adc.h>
@@ -80,24 +81,59 @@ static bool startUlp() {
 }
 #endif
 
+static const char *wakeText = "";
+
+static const char *resetText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "eingeschaltet";
+    case ESP_RST_SW: return "Neustart durch die Firmware";
+    case ESP_RST_PANIC: return "Neustart nach Absturz";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "Neustart durch Watchdog";
+    case ESP_RST_BROWNOUT: return "Neustart nach Unterspannung";
+    case ESP_RST_EXT: return "Reset-Pin";
+    default: return "Neustart";
+  }
+}
+
+const char *sleepWakeText() { return wakeText; }
+
 Wake sleepWakeReason() {
   bool wasSleeping = rtcSleeping;
   rtcSleeping = false;
-  if (!wasSleeping) return Wake::Normal;
+  if (!wasSleeping) {
+    wakeText = resetText();
+    return Wake::Normal;
+  }
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  if (cause == ESP_SLEEP_WAKEUP_ULP) return Wake::Normal;  // Netzstrom zurück
-  if (powerRead(0).externalPower) return Wake::Normal;
+  if (cause == ESP_SLEEP_WAKEUP_ULP) {
+    wakeText = "geweckt durch Netzstrom (ULP)";
+    return Wake::Normal;
+  }
+  if (powerRead(0).externalPower) {
+    wakeText = "geweckt, Netzstrom erkannt";
+    return Wake::Normal;
+  }
 
   int64_t now = rtcSeconds();
   if (cause == ESP_SLEEP_WAKEUP_EXT1) {
     rtcMotionArmedAt = now + MOTION_COOLDOWN_MIN * 60;
+    wakeText = "geweckt durch Bewegung";
     return Wake::Motion;
   }
-  if (cause == ESP_SLEEP_WAKEUP_TIMER && now >= rtcNextReportAt) return Wake::Report;
+  if (cause == ESP_SLEEP_WAKEUP_TIMER && now >= rtcNextReportAt) {
+    wakeText = "geweckt zur Meldung";
+    return Wake::Report;
+  }
   // Zeitgeber für Bewegungssperre oder Netzstrom-Nachsehen: weiterschlafen.
-  if (cause == ESP_SLEEP_WAKEUP_TIMER) return Wake::SleepAgain;
-  return Wake::Normal;  // Reset-Taste o. ä.
+  if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    wakeText = "kurz geweckt, schläft weiter";
+    return Wake::SleepAgain;
+  }
+  wakeText = "aus dem Tiefschlaf per Reset";  // Reset-Taste o. ä.
+  return Wake::Normal;
 }
 
 void sleepScheduleReport() { rtcNextReportAt = rtcSeconds() + settings.sleepReportMin * 60LL; }

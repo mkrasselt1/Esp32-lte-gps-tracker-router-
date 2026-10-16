@@ -54,6 +54,14 @@ enthält keine Zugangsdaten, wohl aber die Position.
 Zeilen, die mit `AT` beginnen, gehen im laufenden Betrieb direkt ans Modem,
 zum Beispiel `AT+CGNSSINFO` oder `AT+CSQ`.
 
+`log` zeigt das Ereignis-Log: jeder Start mit Grund (eingeschaltet, Absturz,
+Unterspannung, geweckt durch Netzstrom, Meldezeit oder Bewegung), Wechsel der
+Betriebsstufe, Tiefschlaf, Zeit bis zur Verbindung und zum GPS-Fix, jeweils mit
+Akkuspannung. Es liegt im Flash, übersteht also Tiefschlaf und Stromausfall,
+und hält die letzten 32 Einträge. Damit lässt sich ein Tag auf Akku auch ohne
+WLAN nachvollziehen. `log-clear` leert es. Die Zeiten sind UTC, sobald einmal
+ein GPS-Fix da war; davor stehen Sekunden seit dem Einschalten.
+
 **Passwort vergessen?** Per USB den seriellen Monitor öffnen (115200 Baud)
 und `factory-reset` eingeben. Danach gelten wieder die Werkseinstellungen.
 
