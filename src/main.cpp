@@ -246,6 +246,9 @@ static void checkSerialCommand() {
   } else if (line == "status") {
     // Zustand über USB ausgeben, ohne Login und ohne Datenverkehr über die SIM.
     Serial.println(statusJson());
+  } else if (line.startsWith("AT") || line.startsWith("at")) {
+    // AT-Befehl ans laufende Modem durchreichen, zum Testen.
+    Serial.println(modemAt(line, 10000));
   }
 }
 

@@ -51,6 +51,8 @@ ohne Anmeldung lesbar, damit andere Geräte im WLAN ihn abfragen können; er
 enthält keine Zugangsdaten, wohl aber die Position.
 
 Über USB gibt `status` im seriellen Monitor denselben Status als JSON aus.
+Zeilen, die mit `AT` beginnen, gehen im laufenden Betrieb direkt ans Modem,
+zum Beispiel `AT+CGNSSINFO` oder `AT+CSQ`.
 
 **Passwort vergessen?** Per USB den seriellen Monitor öffnen (115200 Baud)
 und `factory-reset` eingeben. Danach gelten wieder die Werkseinstellungen.
@@ -236,14 +238,18 @@ GND, und in `config.h` `PIN_POWER_SENSE` auf 34 setzen.
 
 Die Firmware baut für beide Boards. Auf einem **T-SIM7600E** geprüft:
 Start, Hotspot, Einrichtung, Modem mit LTE-Einbuchung (O2/FONIC), APN
-automatisch, PPP im CMUX-Modus mit AT-Befehlen nebenher (`AT+CBC`) sowie die
+automatisch, PPP im CMUX-Modus mit AT-Befehlen nebenher (`AT+CBC`,
+`AT+CGNSSINFO`), GPS samt Parser gegen echte Antworten sowie die
 Netzerkennung über GPIO35 (mit USB ~140 mV, auf Akku die Akkuspannung).
-Noch nicht auf Hardware geprüft: Internet über den Hotspot unter Last, GPS,
+Noch nicht auf Hardware geprüft: Internet über den Hotspot unter Last,
 Display, Energiesparen und Tiefschlaf.
 
-Nach einem Neustart des ESP32 hängt das Modem noch im CMUX-Modus und
-versteht kein AT. Die Firmware erkennt das, schaltet es aus und wieder ein;
-bis zur Verbindung dauert es dann rund eine Minute.
+Nach einem Neustart des ESP32 hängt das Modem noch im CMUX-Modus. Die
+Firmware beendet den Multiplexer (Close-Down-Rahmen) und arbeitet ohne
+Ausschalten weiter: Nach rund 30 s ist die Verbindung wieder da, und weil das
+GNSS durchläuft, sofort auch die Position. Erst wenn das Modem gar nicht
+antwortet, wird es aus- und wieder eingeschaltet; dann braucht der nächste
+Fix wieder Minuten.
 
 Am ehesten hakt es noch bei:
 

@@ -76,13 +76,30 @@ static void setupPins() {
 #endif
 }
 
+// Beendet den CMUX-Modus mit dem Close-Down-Rahmen (CLD auf Kanal 0, 3GPP TS
+// 27.010). Danach versteht das Modem wieder AT, ohne dass es ausgeschaltet
+// werden muss — das GNSS behält dabei seine Bahndaten und hat sofort wieder
+// eine Position, statt minutenlang neu zu suchen.
+static bool leaveCmux() {
+  static const uint8_t CLD[] = {0xF9, 0x03, 0xEF, 0x05, 0xC3, 0x01, 0xF2, 0xF9};
+  Serial1.write(CLD, sizeof(CLD));
+  Serial1.flush();
+  delay(500);
+  return responds(3000);
+}
+
 // Bringt das Modem dazu, auf AT zu antworten. Nach einem Neustart des ESP32
-// läuft es womöglich noch im CMUX-Modus und versteht kein AT — dann
-// zurücksetzen bzw. aus- und wieder einschalten.
+// läuft es womöglich noch im CMUX-Modus und versteht kein AT — dann den
+// Multiplexer beenden, und erst wenn das nicht hilft, zurücksetzen bzw. aus-
+// und wieder einschalten.
 static bool powerOn() {
   setupPins();
   Serial1.begin(MODEM_BAUD, SERIAL_8N1, PIN_MODEM_RX, PIN_MODEM_TX);
   if (responds(2000)) return true;
+  if (leaveCmux()) {
+    Serial.println("Modem war noch im CMUX-Modus, Multiplexer beendet");
+    return true;
+  }
 
 #if PIN_MODEM_RESET >= 0
   Serial.println("Modem zurücksetzen");
@@ -311,6 +328,14 @@ static void modemTask(void *) {
     status.modemState = status.online ? "verbunden" : "ohne Verbindung";
     delay(GNSS_POLL_INTERVAL_S * 1000);
   }
+}
+
+String modemAt(const String &cmd, int timeoutMs) {
+  if (!lock || !status.online) return "Modem nicht verbunden";
+  xSemaphoreTake(lock, portMAX_DELAY);
+  String r = PPP.cmd(cmd.c_str(), timeoutMs);
+  xSemaphoreGive(lock);
+  return r.isEmpty() ? String("(keine Antwort oder ERROR)") : r;
 }
 
 void modemStart() {
