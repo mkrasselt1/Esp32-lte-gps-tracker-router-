@@ -254,7 +254,7 @@ static void logGnss(uint32_t now) {
   if (!status.hasFix) return;
   if (!lastClockAt || now - lastClockAt >= 60000) {
     lastClockAt = now;
-    clockFromGps(status.fix.utc);
+    clockFromGps(status.fix.utc, (now - status.fixAt) / 1000);
   }
   if (!fixLogged) {
     fixLogged = true;

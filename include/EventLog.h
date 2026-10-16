@@ -17,7 +17,8 @@ void logEvent(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void logPrint();
 void logClear();
 
-// Stellt die Uhr nach der GPS-Zeit ("2026-10-16T11:35:32Z"), damit das Log
-// echte Uhrzeiten hat. Weicht sie mehr als ein paar Sekunden ab (Drift des
-// RC-Takts im Tiefschlaf), wird korrigiert und die Abweichung eingetragen.
-void clockFromGps(const char *utc);
+// Stellt die Uhr nach der GPS-Zeit ("2026-10-16T11:35:32Z", ageS Sekunden
+// alt), damit das Log echte Uhrzeiten hat. Weicht sie um 10 s oder mehr ab
+// (Drift des RC-Takts im Tiefschlaf), wird korrigiert und die Abweichung
+// eingetragen.
+void clockFromGps(const char *utc, uint32_t ageS);

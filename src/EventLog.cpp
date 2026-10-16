@@ -127,14 +127,15 @@ static int64_t daysFromCivil(int y, int m, int d) {
   return (int64_t)era * 146097 + doe - 719468;
 }
 
-void clockFromGps(const char *utc) {
+void clockFromGps(const char *utc, uint32_t ageS) {
   int y, mo, d, h, mi, s;
   if (!utc || sscanf(utc, "%4d-%2d-%2dT%2d:%2d:%2d", &y, &mo, &d, &h, &mi, &s) != 6) return;
-  int64_t gps = daysFromCivil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s;
+  // Die Position ist bis zu einem Abfrageintervall alt.
+  int64_t gps = daysFromCivil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s + ageS;
   if (gps < CLOCK_VALID) return;
   int64_t now = clockNow();
   int64_t diff = now - gps;
-  if (now >= CLOCK_VALID && diff > -5 && diff < 5) return;
+  if (now >= CLOCK_VALID && diff > -10 && diff < 10) return;
   timeval tv = {(time_t)gps, 0};
   settimeofday(&tv, nullptr);
   if (now >= CLOCK_VALID) logEvent("Uhr nach GPS korrigiert, sie ging %+lld s", (long long)diff);
