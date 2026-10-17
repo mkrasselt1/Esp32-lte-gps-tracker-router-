@@ -9,6 +9,7 @@
 #include <PPP.h>
 #include <WiFi.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
 #include <esp_sleep.h>
 
 #include "Clients.h"
@@ -130,14 +131,28 @@ static void setMode(Mode m, const char *reason) {
   nextReportAt = millis();  // Wechsel sofort melden
 }
 
+// Hält einen Ausgang im Tiefschlaf auf einem Pegel. RTC-fähige Pins (PWRKEY 4,
+// LED 12, beim T-A7670 auch RESET 5) als RTC-Ausgang, den die im Schlaf
+// laufende RTC-Domäne treibt: Mit gpio_hold_en() auf den Digitalpin blieb die
+// LED an GPIO12 nach WLAN-Betrieb im Tiefschlaf an.
+static void holdInSleep(int pin, int level) {
+  gpio_num_t g = (gpio_num_t)pin;
+  if (rtc_gpio_is_valid_gpio(g)) {
+    rtc_gpio_init(g);
+    rtc_gpio_set_direction(g, RTC_GPIO_MODE_OUTPUT_ONLY);
+    rtc_gpio_set_level(g, level);
+    rtc_gpio_hold_en(g);
+  } else {
+    digitalWrite(pin, level);
+    gpio_hold_en(g);
+  }
+}
+
 static void holdPinsForSleep() {
-  digitalWrite(PIN_MODEM_PWRKEY, LOW);
-  gpio_hold_en((gpio_num_t)PIN_MODEM_PWRKEY);
-  digitalWrite(PIN_BOARD_POWERON, LOW);
-  gpio_hold_en((gpio_num_t)PIN_BOARD_POWERON);
+  holdInSleep(PIN_MODEM_PWRKEY, LOW);
+  holdInSleep(PIN_BOARD_POWERON, LOW);
 #if PIN_MODEM_RESET >= 0
-  digitalWrite(PIN_MODEM_RESET, !MODEM_RESET_LEVEL);
-  gpio_hold_en((gpio_num_t)PIN_MODEM_RESET);
+  holdInSleep(PIN_MODEM_RESET, !MODEM_RESET_LEVEL);
 #endif
   gpio_deep_sleep_hold_en();
 }

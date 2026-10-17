@@ -1,6 +1,7 @@
 #include "Modem.h"
 
 #include <PPP.h>
+#include <driver/rtc_io.h>
 #include <esp_netif_ppp.h>
 
 #include "Settings.h"
@@ -53,9 +54,17 @@ static bool statusPinOn() {
 #endif
 }
 
+// Gibt einen im Tiefschlaf festgehaltenen Pin frei (siehe holdPinsForSleep in
+// main.cpp): Haltefunktion aus und zurück an den Digitalteil.
+static void releasePin(int pin) {
+  gpio_num_t g = (gpio_num_t)pin;
+  gpio_hold_dis(g);
+  if (rtc_gpio_is_valid_gpio(g)) rtc_gpio_deinit(g);
+}
+
 static void setupPins() {
-  gpio_hold_dis((gpio_num_t)PIN_BOARD_POWERON);
-  gpio_hold_dis((gpio_num_t)PIN_MODEM_PWRKEY);
+  releasePin(PIN_BOARD_POWERON);
+  releasePin(PIN_MODEM_PWRKEY);
   pinMode(PIN_BOARD_POWERON, OUTPUT);
   digitalWrite(PIN_BOARD_POWERON, HIGH);
   pinMode(PIN_MODEM_DTR, OUTPUT);
@@ -70,7 +79,7 @@ static void setupPins() {
   pinMode(PIN_MODEM_PWRKEY, OUTPUT);
   digitalWrite(PIN_MODEM_PWRKEY, LOW);
 #if PIN_MODEM_RESET >= 0
-  gpio_hold_dis((gpio_num_t)PIN_MODEM_RESET);
+  releasePin(PIN_MODEM_RESET);
   pinMode(PIN_MODEM_RESET, OUTPUT);
   digitalWrite(PIN_MODEM_RESET, !MODEM_RESET_LEVEL);
 #endif

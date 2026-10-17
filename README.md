@@ -237,8 +237,10 @@ Hotspot am Handy sowie die Netzerkennung über GPIO35 (mit USB ~140 mV, auf
 Akku die Akkuspannung). Zieht ein Gerät viele Daten, meldet lwIP gelegentlich
 `pppos_input_tcpip failed` und verwirft Pakete; das bremst, trennt aber
 nicht. Auf Akku geprüft: Sparmodus nach der eingestellten Zeit ohne Gerät,
-Tiefschlaf nach Stillstand, Aufwecken per ULP beim Einstecken von USB. Noch
-nicht geprüft: Wecken zur Meldung aus dem Tiefschlaf und der Ruhestrom.
+Tiefschlaf nach Stillstand (Modem und blaue LED aus), Wecken zur Meldung
+(verbunden nach ~25 s, GPS-Fix nach ~35 s, danach wieder Schlaf) und
+Aufwecken per ULP beim Einstecken von USB. Noch nicht gemessen: der
+Ruhestrom.
 
 Nach einem Neustart des ESP32 hängt das Modem noch im CMUX-Modus. Die
 Firmware beendet den Multiplexer (Close-Down-Rahmen) und arbeitet ohne
